@@ -1,0 +1,42 @@
+# ==========================================
+# SimPhant Git Ignore Rules
+# ==========================================
+
+# Local private versions & personal save files
+--- Versions/
+--- SaveFiles/
+--- Demonstration/
+--- Debug files/
+___Obsolete/
+*.mbd
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# PyInstaller & build outputs
+dist/
+build/
+*.spec
+*.manifest
+
+# Application logs & CSV export directories
+LogCSV/
+*.log
+
+# Environments & IDE settings
+.venv/
+env/
+venv/
+ENV/
+.vscode/
+.idea/
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.lnk
