@@ -68,6 +68,11 @@ APP_RELEASE_DATE = "2026/09/30"
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
 APP_CREDITS_URL = "https://www.linkedin.com/in/valeriy-shapovalov-9762a098/"
+APP_SOURCE_REPOSITORY_URL = "https://github.com/valeriy-sh79/SimPhant"
+APP_RELEASES_URL = "https://github.com/valeriy-sh79/SimPhant/releases"
+APP_ISSUES_URL = "https://github.com/valeriy-sh79/SimPhant/issues"
+APP_DOCUMENTATION_SITE_URL = "https://valeriy-sh79.github.io/simphant-docs/"
+APP_DOCUMENTATION_REPOSITORY_URL = "https://github.com/valeriy-sh79/simphant-docs"
 
 
 def get_app_base_dir():
@@ -114,6 +119,20 @@ def populate_simphant_info_layout(layout, parent, include_loading=False):
         f'Copyright (C) 2026: <a href="{APP_CREDITS_URL}">{APP_CREDITS_NAME}</a>'
     )
     layout.addWidget(credits_label)
+
+    links_label = QLabel(parent)
+    links_label.setAlignment(Qt.AlignCenter)
+    links_label.setOpenExternalLinks(True)
+    links_label.setWordWrap(True)
+    links_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+    links_label.setText(
+        f'<a href="{APP_SOURCE_REPOSITORY_URL}">Source code</a> | '
+        f'<a href="{APP_RELEASES_URL}">Windows releases</a><br>'
+        f'<a href="{APP_DOCUMENTATION_SITE_URL}">Documentation website</a> | '
+        f'<a href="{APP_DOCUMENTATION_REPOSITORY_URL}">Documentation source</a><br>'
+        f'<a href="{APP_ISSUES_URL}">Issue tracker</a>'
+    )
+    layout.addWidget(links_label)
 
     if include_loading:
         loading_label = QLabel(parent)

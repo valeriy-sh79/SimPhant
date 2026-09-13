@@ -2,6 +2,14 @@
 
 SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
 
+## Quick Links
+
+- Source repository: [SimPhant](https://github.com/valeriy-sh79/SimPhant)
+- Windows releases: [GitHub Releases](https://github.com/valeriy-sh79/SimPhant/releases)
+- Documentation website: [SimPhant Docs](https://valeriy-sh79.github.io/simphant-docs/)
+- Documentation source: [simphant-docs](https://github.com/valeriy-sh79/simphant-docs)
+- Bug reports and feature requests: [Issue tracker](https://github.com/valeriy-sh79/SimPhant/issues)
+
 ## Features
 
 - Interactive 3D visualization powered by PyVista and PyVistaQt
@@ -21,7 +29,7 @@ SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation enviro
 
 ## License
 
-SimPhant™ is free and open-source software distributed under the GNU General Public License v3.0 (GPLv3). See the `LICENSE` file for the full license text.
+SimPhant™ is free and open-source software distributed under the GNU General Public License v3.0 (GPLv3). See [LICENSE.txt](./LICENSE.txt) for the full license text.
 
 ## Project Status
 
@@ -54,15 +62,38 @@ Additional dependencies may be required depending on the enabled solver, CAD, bo
 
 ### Installation
 
-> TODO: Add complete Python installation instructions.
->
-> This section will describe virtual-environment setup, dependency installation, optional packages, and platform-specific requirements.
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/valeriy-sh79/SimPhant.git
+   cd SimPhant
+   ```
+
+2. Create and activate a virtual environment:
+
+   ```powershell
+   py -3.11 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+
+3. Install the required packages:
+
+   ```bash
+   python -m pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+4. Keep the `icons` folder, [main_window.ui](./main_window.ui), and [ui_main_window.py](./ui_main_window.py) next to the Python modules when running from source.
 
 ### Running From Source
 
-> TODO: Add Python launch instructions.
->
-> This section will document the command used to start `main.py`, development configuration, and troubleshooting steps.
+Start the desktop application from the repository root:
+
+```bash
+python main.py
+```
+
+If you change the Qt Designer form, regenerate [ui_main_window.py](./ui_main_window.py) from [main_window.ui](./main_window.ui) before launching the application again.
 
 ## Windows Executable Edition
 
@@ -70,37 +101,33 @@ The Windows executable edition is intended for users who do not want to install 
 
 ### Requirements
 
-- Windows 10 or newer
+- Windows 10 or newer, 64-bit
+- Graphics hardware and drivers capable of running the Qt/PyVista OpenGL viewport
 - A downloaded SimPhant release package
 - No separate Python installation required
 
-> TODO: Confirm the supported Windows versions and hardware requirements.
-
 ### Installation
 
-> TODO: Add `.exe` installation instructions.
->
-> This section will describe where to download the release, how to extract or install the package, whether an installer is provided, and how to handle Windows security prompts.
+1. Download the latest Windows package from [GitHub Releases](https://github.com/valeriy-sh79/SimPhant/releases).
+2. Extract the release `.zip` into a writable folder on your PC.
+3. Open the extracted folder and run `SimPhant.exe`.
+4. If Windows SmartScreen shows a warning, confirm that the package came from the official SimPhant release page before choosing **More info** -> **Run anyway**.
 
 ### Launching SimPhant
 
-> TODO: Add executable launch instructions.
->
-> This section will explain how to start SimPhant using the `.exe` file, where application logs are stored, and how to create a desktop or Start Menu shortcut.
+The packaged build launches the same application as the Python source edition. SimPhant creates its `LogCSV` output folder inside the current or user-selected working directory when logs, telemetry exports, or debug traces are generated.
 
 ### Executable Releases
 
-> TODO: Add links to the GitHub Releases page and downloadable `.exe` packages.
+All public Windows packages are published on the [SimPhant Releases page](https://github.com/valeriy-sh79/SimPhant/releases). Each release should provide the source snapshot and a downloadable Windows archive containing `SimPhant.exe`.
 
 ## Usage
 
-> TODO: Add user documentation.
->
-> Planned topics include importing CAD models, creating primitives, defining reference frames and constraints, configuring solver settings, running simulations, reviewing telemetry, and exporting results for both editions.
+For full usage guidance, see the [SimPhant documentation website](https://valeriy-sh79.github.io/simphant-docs/). The guides cover importing CAD models, creating primitives, defining reference frames and constraints, configuring solver settings, running simulations, reviewing telemetry, and exporting results.
 
 ## Project Files
 
-Example model files are available in the `SaveFiles` directory. These files demonstrate mechanisms and individual features such as joints, springs, gears, contacts, bushings, and motion constraints.
+SimPhant project states are stored as `.mbd` files. Private development save files and historical internal versions are maintained locally by the maintainer and are intentionally excluded from this public repository.
 
 ## Development
 
@@ -110,21 +137,27 @@ The Qt Designer source is `main_window.ui`. The generated `ui_main_window.py` fi
 
 ## Documentation
 
-> TODO: Add documentation links and design notes.
->
-> This section will link to the user guide, technical documentation, solver notes, file-format documentation, and examples.
+User documentation is maintained in a separate Docusaurus repository:
+
+- Public website: [SimPhant Docs](https://valeriy-sh79.github.io/simphant-docs/)
+- Docs source repository: [simphant-docs](https://github.com/valeriy-sh79/simphant-docs)
+
+The documentation site contains the user guide, feature notes, and multilingual documentation content for English, Russian, and Ukrainian users.
 
 ## Support
 
-> TODO: Add support information.
->
-> This section will provide the issue tracker, discussion channel, contact details, and bug-report guidelines.
+Please use the [SimPhant issue tracker](https://github.com/valeriy-sh79/SimPhant/issues) for bug reports, installation problems, and feature requests. When reporting a problem, include the SimPhant version, operating system, reproduction steps, and any traceback or screenshots that help explain the issue.
 
 ## Contributing
 
-> TODO: Add contribution guidelines.
->
-> Contributions, bug reports, feature requests, and technical discussions will be documented here after the project workflow is established.
+Contributions are welcome through GitHub pull requests.
+
+1. Fork the [SimPhant repository](https://github.com/valeriy-sh79/SimPhant).
+2. Create a feature or fix branch from `develop`.
+3. Test your changes locally before submitting.
+4. Open a pull request back to `develop` and describe the motivation, scope, and validation results.
+
+Documentation fixes can be submitted through the [simphant-docs repository](https://github.com/valeriy-sh79/simphant-docs) in the same way.
 
 ## Author
 
