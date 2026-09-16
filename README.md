@@ -1,5 +1,7 @@
 # SimPhant
 
+![SimPhant introduction](./icons/Intro_Picture.jpg)
+
 SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
 
 ## Quick Links
@@ -9,6 +11,16 @@ SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation enviro
 - Documentation website: [SimPhant Docs](https://valeriy-sh79.github.io/simphant-docs/)
 - Documentation source: [simphant-docs](https://github.com/valeriy-sh79/simphant-docs)
 - Bug reports and feature requests: [Issue tracker](https://github.com/valeriy-sh79/SimPhant/issues)
+
+## Getting Started
+
+For most users, the fastest way to start with SimPhant is:
+
+1. Download the latest Windows package from [GitHub Releases](https://github.com/valeriy-sh79/SimPhant/releases).
+2. Launch `SimPhant.exe`.
+3. Open one of the bundled models from the [Examples](./Examples/) folder to explore how real mechanisms are modeled and simulated.
+
+If you want to inspect the implementation, modify the solver, or contribute code, use the Python source edition instead.
 
 ## Features
 
@@ -39,12 +51,46 @@ The source code is publicly available so users and contributors can inspect, use
 
 ## Choose Your Edition
 
-SimPhant is intended to be available in two forms:
+SimPhant is available in two forms:
 
-1. **Python source edition** for users who have Python installed and want to run or develop the project from source.
-2. **Windows executable edition** for users who want to launch SimPhant directly without installing Python or managing Python packages.
+1. **Windows executable edition** for users who want to launch SimPhant directly without installing Python or managing Python packages.
+2. **Python source edition** for users who have Python installed and want to run, inspect, or develop the project from source.
 
-Both editions provide the same application and simulation features. The executable edition is the recommended option for users who only want to run SimPhant.
+Both editions provide the same core application and simulation features. Each edition also includes an [Examples](./Examples/) folder with ready-to-run `.mbd` reference models. The Windows executable edition is the recommended option for users who only want to run SimPhant.
+
+## Windows Executable Edition
+
+The Windows executable edition is intended for users who do not want to install Python. It is distributed as a packaged application containing the runtime, required dependencies, and bundled example models.
+
+### Requirements
+
+- Windows 10 or newer, 64-bit
+- Graphics hardware and drivers capable of running the Qt/PyVista OpenGL viewport
+- A downloaded SimPhant release package
+- No separate Python installation required
+
+### Installation
+
+1. Download the latest Windows package from [GitHub Releases](https://github.com/valeriy-sh79/SimPhant/releases).
+2. Extract the release `.zip` into a writable folder on your PC.
+3. Open the extracted package. It includes `SimPhant.exe` and an [Examples](./Examples/) folder with sample `.mbd` models covering classical physical and engineering mechanisms.
+4. Run `SimPhant.exe`.
+5. If Windows SmartScreen shows a warning, confirm that the package came from the official SimPhant release page before choosing **More info** -> **Run anyway**.
+
+### Launching SimPhant
+
+The packaged build launches the same application as the Python source edition. Application logs and telemetry CSV exports are saved in the current project folder or in a user-defined working directory, if one is set. The bundled [Examples](./Examples/) models are immediately available after installation and can be used to explore reference mechanisms and learn how they are built in SimPhant.
+
+### Recommended First Steps
+
+1. Start SimPhant.
+2. Open one of the bundled `.mbd` files from the [Examples](./Examples/) folder.
+3. Run the model and inspect the scene, project tree, and telemetry workflow.
+4. Use the public documentation site for guided explanations of the main modeling and simulation features.
+
+### Executable Releases
+
+All public Windows packages are published on the [SimPhant Releases page](https://github.com/valeriy-sh79/SimPhant/releases). Each release should provide the source snapshot and a downloadable Windows archive containing `SimPhant.exe`.
 
 ## Python Source Edition
 
@@ -83,7 +129,8 @@ Additional dependencies may be required depending on the enabled solver, CAD, bo
    pip install -r requirements.txt
    ```
 
-4. Keep the `icons` folder, [main_window.ui](./main_window.ui), and [ui_main_window.py](./ui_main_window.py) next to the Python modules when running from source.
+4. The repository includes an [Examples](./Examples/) folder with ready-to-run `.mbd` models that can be opened immediately as learning and reference examples.
+5. Keep the `icons` folder, [main_window.ui](./main_window.ui), and [ui_main_window.py](./ui_main_window.py) next to the Python modules when running from source.
 
 ### Running From Source
 
@@ -93,41 +140,24 @@ Start the desktop application from the repository root:
 python main.py
 ```
 
+When launched from source, SimPhant saves application logs and telemetry CSV exports in the current project folder or in a user-defined working directory, if one is set.
+
 If you change the Qt Designer form, regenerate [ui_main_window.py](./ui_main_window.py) from [main_window.ui](./main_window.ui) before launching the application again.
-
-## Windows Executable Edition
-
-The Windows executable edition is intended for users who do not want to install Python. It will be distributed as a packaged application containing the runtime and required dependencies.
-
-### Requirements
-
-- Windows 10 or newer, 64-bit
-- Graphics hardware and drivers capable of running the Qt/PyVista OpenGL viewport
-- A downloaded SimPhant release package
-- No separate Python installation required
-
-### Installation
-
-1. Download the latest Windows package from [GitHub Releases](https://github.com/valeriy-sh79/SimPhant/releases).
-2. Extract the release `.zip` into a writable folder on your PC.
-3. Open the extracted folder and run `SimPhant.exe`.
-4. If Windows SmartScreen shows a warning, confirm that the package came from the official SimPhant release page before choosing **More info** -> **Run anyway**.
-
-### Launching SimPhant
-
-The packaged build launches the same application as the Python source edition. SimPhant creates its `LogCSV` output folder inside the current or user-selected working directory when logs, telemetry exports, or debug traces are generated.
-
-### Executable Releases
-
-All public Windows packages are published on the [SimPhant Releases page](https://github.com/valeriy-sh79/SimPhant/releases). Each release should provide the source snapshot and a downloadable Windows archive containing `SimPhant.exe`.
 
 ## Usage
 
-For full usage guidance, see the [SimPhant documentation website](https://valeriy-sh79.github.io/simphant-docs/). The guides cover importing CAD models, creating primitives, defining reference frames and constraints, configuring solver settings, running simulations, reviewing telemetry, and exporting results.
+For full usage guidance, see the [SimPhant documentation website](https://valeriy-sh79.github.io/simphant-docs/). The guides cover importing CAD models, creating primitives, defining reference frames and constraints, configuring solver settings, running simulations, reviewing telemetry, and exporting results. The bundled [Examples](./Examples/) directory provides reference models that users can open immediately after installation.
+
+Suggested starting examples include:
+
+- `Newtons_Cradle.mbd`
+- `Gyroscope.mbd`
+- `Differential.mbd`
+- `Universal_Cardan_Joint_Aligned.mbd`
 
 ## Project Files
 
-SimPhant project states are stored as `.mbd` files. Private development save files and historical internal versions are maintained locally by the maintainer and are intentionally excluded from this public repository.
+SimPhant project states are stored as `.mbd` files. The public [Examples](./Examples/) folder contains ready-to-run reference models for classical physical and engineering mechanisms, so users can inspect how they are built in SimPhant immediately after installation. Private development save files and historical internal versions are maintained locally by the maintainer and are intentionally excluded from this public repository.
 
 ## Development
 

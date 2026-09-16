@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: integrators.py
 #  Description:
 #     Implements various numerical integration strategies for solving the equations of motion 
@@ -11,9 +10,7 @@
 #     and wrappers for SciPy's adaptive algorithms.  
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #

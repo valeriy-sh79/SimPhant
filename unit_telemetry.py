@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: unit_telemetry.py
 #  Description:
 #      Provides a graphical interface for post-processing and visualizing telemetry data 
@@ -10,9 +9,7 @@
 #      forces, springs, contacts, bushings, and gear pairs.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #
@@ -446,12 +443,19 @@ class TelemetryWindow(QMainWindow):
                 
                 # SciPy strictly uses scalar-last quaternion format: [x, y, z, w]
                 quats = np.vstack((qx, qy, qz, qw)).T
-                eulers = Rotation.from_quat(quats).as_euler('xyz', degrees=False)
+                rotations = Rotation.from_quat(quats)
+
+                # Accumulate frame-to-frame global rotation increments to avoid
+                # Euler singularities and branch flips for simple revolute motion.
+                delta_rotations = rotations[1:] * rotations[:-1].inv()
+                cumulative_angles = np.vstack((
+                    np.zeros(3),
+                    np.cumsum(delta_rotations.as_rotvec(), axis=0)
+                ))
                 
-                # We use np.unwrap to prevent ugly 180-degree zigzag jumps on the graph!
-                if "Roll_X" in var_name: y_array = np.unwrap(eulers[:, 0])
-                elif "Pitch_Y" in var_name: y_array = np.unwrap(eulers[:, 1])
-                elif "Yaw_Z" in var_name: y_array = np.unwrap(eulers[:, 2])
+                if "Roll_X" in var_name: y_array = cumulative_angles[:, 0]
+                elif "Pitch_Y" in var_name: y_array = cumulative_angles[:, 1]
+                elif "Yaw_Z" in var_name: y_array = cumulative_angles[:, 2]
             elif "Velocity X" in var_name: y_array = self.solver.simulation_history[:, vel_start + 0]
             elif "Velocity Y" in var_name: y_array = self.solver.simulation_history[:, vel_start + 1]
             elif "Velocity Z" in var_name: y_array = self.solver.simulation_history[:, vel_start + 2]

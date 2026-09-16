@@ -1,7 +1,7 @@
+# -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: math_kernels.py
 #  Description:
 #      Provides optimized mathematical kernels for multibody dynamics simulations, including
@@ -9,9 +9,7 @@
 #      vector and matrix operations used in the simulation engine.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #
