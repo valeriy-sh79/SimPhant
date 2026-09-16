@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
@@ -10,10 +9,8 @@
 #     the PyVista 3D viewport, and simulation dispatching.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
-#   
+#  GitHub: https://github.com/valeriy-sh79
+
 #  This file is part of SimPhant™.
 #
 #  SimPhant™ is free software: you can redistribute it and/or modify
@@ -32,6 +29,7 @@
 
 import sys
 import os   
+import re
 import trimesh
 import numpy as np
 import pyvista as pv
@@ -40,6 +38,8 @@ import random
 import logging
 
 from pyvistaqt import QtInteractor
+from PySide6.QtGui import QDesktopServices, QPainter, QPixmap, QPalette
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, QVBoxLayout,
                                QTreeWidgetItem, QColorDialog, QInputDialog, QMessageBox,
                                QDialog, QLabel, QPushButton) # <--- Added InputDialog and MessageBox
@@ -54,7 +54,7 @@ from unit_kinematics import RFrame
 from unit_forces import Force, ForceType, ForceFrame  
 from unit_joints import Joint, JointType
 from unit_solver import MBSolver
-from PySide6.QtCore import QTimer, QEvent, Qt, QObject, Signal
+from PySide6.QtCore import QTimer, QEvent, Qt, QObject, Signal, QUrl, QByteArray, QSize, QRectF
 from unit_springs import CompressionSpring, TorsionSpring, Bushing 
 from unit_project import ProjectManager
 from unit_motions import JointMotion, MotionTransRot, MotionType
@@ -62,9 +62,9 @@ from math_kernels import warm_up_numba_kernels
 
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
-APP_DESCRIPTION = "Advanced Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.1"
-APP_RELEASE_DATE = "2026/09/30"
+APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
+APP_VERSION = "2026.09.0"
+APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
 APP_CREDITS_URL = "https://www.linkedin.com/in/valeriy-shapovalov-9762a098/"
@@ -80,16 +80,66 @@ def get_app_base_dir():
     return getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
 
+def is_dark_app_theme(widget=None):
+    """Detects whether the current Qt or Windows color scheme is dark."""
+    app = QApplication.instance()
+    if app is not None:
+        style_hints = app.styleHints()
+        if style_hints is not None and hasattr(style_hints, 'colorScheme'):
+            try:
+                color_scheme = style_hints.colorScheme()
+                if color_scheme == Qt.ColorScheme.Dark:
+                    return True
+                if color_scheme == Qt.ColorScheme.Light:
+                    return False
+            except Exception:
+                pass
+
+    palette = widget.palette() if widget is not None else (app.palette() if app is not None else None)
+    if palette is not None:
+        return palette.color(QPalette.Window).lightness() < 128
+
+    return False
+
+
+def render_simphant_logo_pixmap(size, widget=None):
+    """Renders the About-logo SVG with a transparent background and theme-aware strokes."""
+    logo_path = os.path.join(get_app_base_dir(), "icons", "SimPhant_Logo.svg")
+    if not os.path.exists(logo_path):
+        return None
+
+    try:
+        with open(logo_path, 'r', encoding='utf-8') as svg_file:
+            svg_text = svg_file.read()
+
+        svg_text = re.sub(r'<rect[^>]*fill="#FFFFFF"[^>]*/>', '', svg_text, count=1)
+        line_color = "#FFFFFF" if is_dark_app_theme(widget) else "#000000"
+        svg_text = svg_text.replace('stroke="#000000"', f'stroke="{line_color}"')
+        svg_text = svg_text.replace('fill="#000000"', f'fill="{line_color}"')
+
+        renderer = QSvgRenderer(QByteArray(svg_text.encode('utf-8')))
+        if not renderer.isValid():
+            return None
+
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.transparent)
+
+        painter = QPainter(pixmap)
+        renderer.render(painter, QRectF(pixmap.rect()))
+        painter.end()
+
+        return pixmap
+    except Exception:
+        return None
+
+
 def populate_simphant_info_layout(layout, parent, include_loading=False):
     """Adds the shared SimPhant information block used by About and startup dialogs."""
     logo_label = QLabel(parent)
     logo_label.setAlignment(Qt.AlignCenter)
 
-    logo_path = os.path.join(get_app_base_dir(), "icons", "SimPhant_Logo.svg")
-    if os.path.exists(logo_path):
-        from PySide6.QtGui import QIcon
-
-        logo_pixmap = QIcon(logo_path).pixmap(150, 150)
+    logo_pixmap = render_simphant_logo_pixmap(QSize(150, 150), parent)
+    if logo_pixmap is not None:
         logo_label.setPixmap(logo_pixmap)
         logo_label.setFixedSize(150, 150)
 
@@ -107,7 +157,7 @@ def populate_simphant_info_layout(layout, parent, include_loading=False):
     text_label.setText(
         f"{APP_DESCRIPTION}\n\n"
         f"Version: {APP_VERSION}\n"
-        f"Release date: {APP_RELEASE_DATE}\n"
+        # f"Release date: {APP_RELEASE_DATE}\n"
         f"License: {APP_LICENSE}"
     )
     layout.addWidget(text_label)
@@ -115,11 +165,13 @@ def populate_simphant_info_layout(layout, parent, include_loading=False):
     credits_label = QLabel(parent)
     credits_label.setAlignment(Qt.AlignCenter)
     credits_label.setOpenExternalLinks(True)
+    credits_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+    credits_label.setStyleSheet("font-size: 9pt;")
     credits_label.setText(
-        f'Copyright (C) 2026: <a href="{APP_CREDITS_URL}">{APP_CREDITS_NAME}</a>'
+        f'Author: <a href="{APP_CREDITS_URL}">{APP_CREDITS_NAME}</a>'
     )
     layout.addWidget(credits_label)
-
+    
     links_label = QLabel(parent)
     links_label.setAlignment(Qt.AlignCenter)
     links_label.setOpenExternalLinks(True)
@@ -133,7 +185,7 @@ def populate_simphant_info_layout(layout, parent, include_loading=False):
         f'<a href="{APP_ISSUES_URL}">Issue tracker</a>'
     )
     layout.addWidget(links_label)
-
+    
     if include_loading:
         loading_label = QLabel(parent)
         loading_label.setAlignment(Qt.AlignCenter)
@@ -221,17 +273,11 @@ class PhysicsEngineMain(QMainWindow):
         super().__init__()
         
         # --- Initialize Project Directories and Logger ---
-        self.working_dir = os.getcwd()
-        self.output_dir = os.path.join(os.getcwd(), "LogCSV")
-        os.makedirs(self.output_dir, exist_ok=True)
-        
-        log_file = os.path.join(self.output_dir, "debug_log.txt")
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.INFO,
-            format='%(asctime)s [%(levelname)s] %(message)s',
-            filemode='w' # 'w' overwrites the log every time user restarts the app
-        )
+        self.project_dir = os.path.dirname(os.path.abspath(__file__))
+        self.working_dir = self.project_dir
+        self.output_dir = self.working_dir
+
+        self._configure_debug_logging(self.project_dir, append=False)
         logging.info("Application Started. Physics Engine Initialized.")
         
         self.ui = Ui_MainWindow()
@@ -299,6 +345,8 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.actionExit.triggered.connect(self.close)
         if hasattr(self.ui, 'actionAbout_SimPhant'):
             self.ui.actionAbout_SimPhant.triggered.connect(self.show_about_dialog)
+        if hasattr(self.ui, 'actionDocumentation'):
+            self.ui.actionDocumentation.triggered.connect(self.open_documentation)
         if hasattr(self.ui, 'actionShowTraceback'):
             self.ui.actionShowTraceback.triggered.connect(self.show_traceback_dock)
         
@@ -859,8 +907,6 @@ class PhysicsEngineMain(QMainWindow):
                 except Exception:
                     pass
 
-        from PySide6.QtGui import QPalette
-
         bg_color = self.palette().color(QPalette.Window)
         return "dark_ui" if bg_color.lightness() < 128 else "light_ui"
 
@@ -1017,9 +1063,21 @@ class PhysicsEngineMain(QMainWindow):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Working Directory", self.working_dir)
         if dir_path:
             self.working_dir = dir_path
-            self.output_dir = os.path.join(self.working_dir, "LogCSV")
-            os.makedirs(self.output_dir, exist_ok=True)
+            self.output_dir = self.working_dir
+            self._configure_debug_logging(self.working_dir, append=True)
+            logging.info(f"Debug log redirected to: {self.debug_log_path}")
             print(f"Working directory updated to: {self.working_dir}")
+
+    def _configure_debug_logging(self, log_dir, append=False):
+        """Configures the debug log file location independently from CSV output."""
+        self.debug_log_path = os.path.join(log_dir, "debug_log.txt")
+        logging.basicConfig(
+            filename=self.debug_log_path,
+            level=logging.INFO,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            filemode='a' if append else 'w',
+            force=True,
+        )
 
     def show_about_dialog(self):
         """Displays the About SimPhant window with logo and program metadata."""
@@ -1037,6 +1095,15 @@ class PhysicsEngineMain(QMainWindow):
         layout.addWidget(close_button, alignment=Qt.AlignCenter)
 
         dialog.exec()
+
+    def open_documentation(self):
+        """Opens the public SimPhant documentation website in the default browser."""
+        if not QDesktopServices.openUrl(QUrl(APP_DOCUMENTATION_SITE_URL)):
+            QMessageBox.warning(
+                self,
+                "Documentation",
+                f"Failed to open the documentation website:\n{APP_DOCUMENTATION_SITE_URL}",
+            )
 
     def _get_existing_working_dir(self):
         """Returns a valid starting directory for file dialogs."""
@@ -1838,7 +1905,7 @@ class PhysicsEngineMain(QMainWindow):
                 if is_actuator:
                     # Convert rad/s -> RPM OR m/s -> mm/s for the UI display
                     ui_speed = force.speed_max * (30.0 / np.pi) if is_torque else (force.speed_max * 1000.0)
-                    self.ui.Edit_MaxActuatorSpeed.setText(f"{ui_speed:.3f}")
+                    self.ui.Edit_MaxActuatorSpeed.setText(f"{ui_speed}") #{ui_speed:.3f}
                     
                     # --- Calculate Peak Power for existing Actuator ---
                     try:
@@ -1850,7 +1917,7 @@ class PhysicsEngineMain(QMainWindow):
                         # It is a math function (e.g. sin(t), step(...)), skip calculation
                         peak_power = 0.0
                         
-                    self.ui.Edit_ActPowerLimit.setText(f"{peak_power:.3f}")
+                    self.ui.Edit_ActPowerLimit.setText(f"{peak_power}") # {peak_power:.3f}
                     # --- Load Braking State ---
                     self.ui.chkAllowActuatorBraking.setChecked(force.allow_braking)
                 else:
@@ -1883,9 +1950,10 @@ class PhysicsEngineMain(QMainWindow):
                 self.ui.Edit_RFBodyJ_CompSpring.setText(spring.rf_j_name)
                 
                 # Convert SI back to UI units
-                self.ui.Edit_StiffnessCompSpring.setText(f"{spring.stiffness / 1000.0:.3f}")
-                self.ui.Edit_DampingCompSpring.setText(f"{spring.damping / 1000.0:.3f}")
-                self.ui.Edit_PreloadCompSpring.setText(f"{spring.preload:.3f}")
+                
+                self.ui.Edit_StiffnessCompSpring.setText(f"{spring.stiffness / 1000.0}")
+                self.ui.Edit_DampingCompSpring.setText(f"{spring.damping / 1000.0}")
+                self.ui.Edit_PreloadCompSpring.setText(f"{spring.preload}")
                 
                 self.ui.chkEnabledCompSpring.blockSignals(True)
                 self.ui.chkEnabledCompSpring.setChecked(spring.enabled)
@@ -3568,7 +3636,7 @@ class PhysicsEngineMain(QMainWindow):
                     peak_power = (magnitude * speed_max_si) / 4.0
                 else:
                     peak_power = 0.0
-                self.ui.Edit_ActPowerLimit.setText(f"{peak_power:.3f}")
+                self.ui.Edit_ActPowerLimit.setText(f"{peak_power}")
                 
             except ValueError:
                 print("Error: Invalid numerical max speed.")

@@ -1565,6 +1565,7 @@
     <addaction name="actionSetWorkingDir"/>
     <addaction name="actionShowTraceback"/>
     <addaction name="separator"/>
+    <addaction name="actionDocumentation"/>
     <addaction name="actionAbout_SimPhant"/>
    </widget>
    <addaction name="menuFile"/>
@@ -7250,6 +7251,11 @@ li.checked::marker { content: &quot;\2612&quot;; }
   <action name="actionShowTraceback">
    <property name="text">
     <string>Show Traceback Window</string>
+   </property>
+  </action>
+  <action name="actionDocumentation">
+   <property name="text">
+    <string>Documentation</string>
    </property>
   </action>
  </widget>

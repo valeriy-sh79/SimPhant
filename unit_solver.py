@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
 #      integrates the physics step, and extracts exact reaction forces.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #
@@ -34,6 +31,7 @@ import scipy.linalg
 import os
 import csv
 import logging
+import warnings
 
 from integrators import CustomRK4, SciPyIntegrator
 from scipy.spatial.transform import Rotation
@@ -157,8 +155,10 @@ class MBSolver:
             r = Rotation.from_quat(quat)
             body.principal_axes = r.as_matrix()
             
-            # Extract Euler Angles for PyVista UI
-            euler_xyz = r.as_euler('xyz', degrees=True)
+            # Euler angles are UI/export helpers; quaternion + matrix remain authoritative.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                euler_xyz = r.as_euler('xyz', degrees=True)
             body.pos_angles = np.array([euler_xyz[2], euler_xyz[1], euler_xyz[0]])
             
             body.velocity = Y[vel_idx : vel_idx+3]

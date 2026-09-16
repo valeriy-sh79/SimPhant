@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: unit_forces.py
 #  Description:
 #      Defines the Force class and related enumerations for handling various types of forces and torques
 #      applied to rigid bodies, including support for time-dependent expressions and 3D visualization.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #

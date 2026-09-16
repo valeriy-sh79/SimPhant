@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.1
-#  Release Date: 2026/09/30
+#  Version: 2026.09.0
 #  Module: unit_gears.py
 #  Description:
 #      Procedurally generates mathematically accurate 3D CAD meshes for various gear types, 
 #      including spur, helical, internal, and bevel gears.
 #
 #  Copyright (C) 2026  Valeriy Shapovalov
-#  Contact:
-#      Email: valeriy.shapovalov79@gmail.com
-#      GitHub: https://github.com/valeriy-sh79
+#  GitHub: https://github.com/valeriy-sh79
 #   
 #  This file is part of SimPhant™.
 #
