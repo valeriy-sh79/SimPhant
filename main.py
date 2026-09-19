@@ -63,7 +63,7 @@ from math_kernels import warm_up_numba_kernels
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
 APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.09.0"
+APP_VERSION = "2026.09.1"
 APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
@@ -73,6 +73,8 @@ APP_RELEASES_URL = "https://github.com/valeriy-sh79/SimPhant/releases"
 APP_ISSUES_URL = "https://github.com/valeriy-sh79/SimPhant/issues"
 APP_DOCUMENTATION_SITE_URL = "https://valeriy-sh79.github.io/simphant-docs/"
 APP_DOCUMENTATION_REPOSITORY_URL = "https://github.com/valeriy-sh79/simphant-docs"
+APP_VIDEO_USER_GUIDE_URL = "https://youtu.be/UmAx7vWeA8s"
+APP_VIDEO_USER_GUIDE_RU_URL = "https://youtu.be/YOSsoQnl2pM?si=IbnJsYosDNky-SW4"
 
 
 def get_app_base_dir():
@@ -180,8 +182,10 @@ def populate_simphant_info_layout(layout, parent, include_loading=False):
     links_label.setText(
         f'<a href="{APP_SOURCE_REPOSITORY_URL}">Source code</a> | '
         f'<a href="{APP_RELEASES_URL}">Windows releases</a><br>'
-        f'<a href="{APP_DOCUMENTATION_SITE_URL}">Documentation website</a> | '
+        f'<a href="{APP_DOCUMENTATION_SITE_URL}">Documentation website (EN / RU / UA)</a> | '
         f'<a href="{APP_DOCUMENTATION_REPOSITORY_URL}">Documentation source</a><br>'
+        f'<a href="{APP_VIDEO_USER_GUIDE_URL}">Video user guide (EN)</a> | '
+        f'<a href="{APP_VIDEO_USER_GUIDE_RU_URL}">Видео руководство (RU)</a><br>'
         f'<a href="{APP_ISSUES_URL}">Issue tracker</a>'
     )
     layout.addWidget(links_label)
