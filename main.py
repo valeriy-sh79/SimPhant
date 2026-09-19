@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.09.1
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
