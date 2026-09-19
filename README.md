@@ -4,6 +4,9 @@
 
 SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
 
+### Short demo video presenting different simulations created and solved in SimPhant
+[![SimPhant Demo](https://img.youtube.com/vi/XvuY2sBuQKQ/hqdefault.jpg)](https://youtu.be/XvuY2sBuQKQ)
+
 ## Quick Links
 
 - Source repository: [SimPhant](https://github.com/valeriy-sh79/SimPhant)
@@ -21,6 +24,11 @@ For most users, the fastest way to start with SimPhant is:
 3. Open one of the bundled models from the [Examples](./Examples/) folder to explore how real mechanisms are modeled and simulated.
 
 If you want to inspect the implementation, modify the solver, or contribute code, use the Python source edition instead.
+
+### Video instructions (YouTube) covering installation, working with SimPhant tools and Documentation
+
+- [User Guide (Video)](https://youtu.be/UmAx7vWeA8s)
+- [Руководство пользователя (Видео)](https://youtu.be/YOSsoQnl2pM?si=IbnJsYosDNky-SW4)
 
 ## Features
 
@@ -150,9 +158,10 @@ For full usage guidance, see the [SimPhant documentation website](https://valeri
 
 Suggested starting examples include:
 
+- `Double_Pendulum.mbd`
 - `Newtons_Cradle.mbd`
-- `Gyroscope.mbd`
-- `Differential.mbd`
+- `Wheel_Suspension_Kinematic.mbd`
+- `Helical_Gear_Pair.mbd`
 - `Universal_Cardan_Joint_Aligned.mbd`
 
 ## Project Files

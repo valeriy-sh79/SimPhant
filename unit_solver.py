@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.09.1
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
@@ -686,35 +686,27 @@ class MBSolver:
             cp.current_F_damp = 0.0
             cp.current_F_total = 0.0
             cp.current_F_friction = 0.0
-            
-        # --- Phase 1 & 2 Collision Detection ---
+
         if not hasattr(self, 'last_collision_print_time'):
             self.last_collision_print_time = -1.0 
             
         print_telemetry = (t - self.last_collision_print_time) >= 0.05
-        
-        overlapping_pairs = self.check_broadphase_collisions(t)
-        
-        # --- Iterate through ContactPair objects, not tuples! ---
-        for cp in overlapping_pairs:
-            contact_manifold = self.evaluate_narrow_phase(cp.body_i, cp.body_j, getattr(cp, 'mesh_mode', 0))
-            
-            if len(contact_manifold) > 0 and print_telemetry:
-                max_depth = max([c['depth'] for c in contact_manifold]) * 1000.0 # Convert to mm
-                print(f"[{t:.3f}s] NARROW PHASE: {len(contact_manifold)} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth:.2f} mm)")
-                self.last_collision_print_time = t
-        
+
+        active_contacts = self.check_broadphase_collisions(t)
         
         Q = self.build_force_vector(t)
 
         # ==========================================
         # --- PHASE 3 - COMPLIANT CONTACT FORCES ---
         # ==========================================
-        active_contacts = self.check_broadphase_collisions(t)
-        
         for cp in active_contacts:
             # We pass the two bodies defined in the pair to the Narrow Phase
             contact_manifold = self.evaluate_narrow_phase(cp.body_i, cp.body_j, getattr(cp, 'mesh_mode', 0))
+
+            if len(contact_manifold) > 0 and print_telemetry:
+                max_depth = max(c['depth'] for c in contact_manifold) * 1000.0
+                print(f"[{t:.3f}s] NARROW PHASE: {len(contact_manifold)} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth:.2f} mm)")
+                self.last_collision_print_time = t
             
             for contact in contact_manifold:
                 pen = contact['body_pen']
@@ -1671,25 +1663,29 @@ class MBSolver:
                 print(f"  -> ERROR: Trimesh proximity crashed! {e}")
                 return []
 
-            manifold = []
-            for i in range(len(target_local_candidates_mm)):
-                vec_to_vertex = target_local_candidates_mm[i] - closest_pts_mm[i]
-                local_normal = tar_mesh.face_normals[tri_ids[i]]
-                
-                dot_prod = np.dot(vec_to_vertex, local_normal)
-                depth_m = distances_mm[i] * 0.001
-                
-                if dot_prod < -1e-5:
-                    if depth_m < 1e-6: continue
-                    global_normal = target.principal_axes @ local_normal
-                    manifold.append({
-                        'body_pen': penetrator,          
-                        'body_tar': target,              
-                        'point': candidate_verts_m[i],    
-                        'normal': global_normal,         
-                        'depth': depth_m                   
-                    })
-            return manifold
+            local_normals = tar_mesh.face_normals[tri_ids]
+            vec_to_vertices = target_local_candidates_mm - closest_pts_mm
+            dot_products = np.einsum('ij,ij->i', vec_to_vertices, local_normals)
+            depths_m = distances_mm * 0.001
+            valid_mask = (dot_products < -1e-5) & (depths_m >= 1e-6)
+
+            if not np.any(valid_mask):
+                return []
+
+            valid_points = candidate_verts_m[valid_mask]
+            valid_normals = (target.principal_axes @ local_normals[valid_mask].T).T
+            valid_depths = depths_m[valid_mask]
+
+            return [
+                {
+                    'body_pen': penetrator,
+                    'body_tar': target,
+                    'point': point,
+                    'normal': normal,
+                    'depth': depth,
+                }
+                for point, normal, depth in zip(valid_points, valid_normals, valid_depths)
+            ]
 
         contacts.extend(get_penetrations(body_a, body_b))
         contacts.extend(get_penetrations(body_b, body_a))
