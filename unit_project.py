@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_project.py
 #  Description:
 #      Handles saving and loading the complete MBD simulation state, including exporting meshes and project data.
@@ -202,6 +202,8 @@ class ProjectManager:
                 "mu": cp.mu,
                 "slip_tolerance": cp.slip_tolerance,
                 "mesh_mode": getattr(cp, 'mesh_mode', 0), # <--- THE NEW VARIABLE
+                "symmetric_contact_search": getattr(cp, 'symmetric_contact_search', True),
+                "contact_candidate_reduction_enabled": getattr(cp, 'contact_candidate_reduction_enabled', True),
                 "enabled": cp.enabled
             })
 
@@ -255,17 +257,29 @@ class ProjectManager:
         if hasattr(app, 'solver') and app.solver is not None:
             if getattr(app.solver, 'simulation_history', None) is not None:
                 results_path = os.path.join(temp_dir, "results.npz")
+                diagnostics_ready = bool(getattr(app.solver, 'diagnostics_ready', False))
+                time_history = getattr(app.solver, 'time_history', None)
+                if time_history is None:
+                    time_history = np.arange(len(app.solver.simulation_history), dtype=float) * app.simulation_dt
+
+                lambda_history = app.solver.lambda_history if diagnostics_ready and getattr(app.solver, 'lambda_history', None) is not None else np.zeros((0, getattr(app.solver, 'num_equations', 0)))
+                gear_lambda_history = getattr(app.solver, 'gear_lambda_history', None) if diagnostics_ready and getattr(app.solver, 'gear_lambda_history', None) is not None else np.zeros((0, getattr(app.solver, 'num_gear_eq', 0)))
+                contact_history = getattr(app.solver, 'contact_history', None) if diagnostics_ready and getattr(app.solver, 'contact_history', None) is not None else np.zeros((0, len(getattr(app, 'contact_pairs', [])), 4))
+                motion_lambda_history = getattr(app.solver, 'motion_lambda_history', None) if diagnostics_ready and getattr(app.solver, 'motion_lambda_history', None) is not None else np.zeros((0, getattr(app.solver, 'num_motion_eq', 0)))
+
                 np.savez_compressed(
                     results_path,
                     simulation_history=app.solver.simulation_history,
-                    lambda_history=app.solver.lambda_history,
-                    contact_history=getattr(app.solver, 'contact_history', np.zeros(0)),
+                    time_history=time_history,
+                    diagnostics_ready=np.array([1 if diagnostics_ready else 0], dtype=np.int8),
+                    lambda_history=lambda_history,
+                    contact_history=contact_history,
                     
                     # --- Embed the gear forces into the save file! ---
-                    gear_lambda_history=getattr(app.solver, 'gear_lambda_history', np.zeros(0)),
+                    gear_lambda_history=gear_lambda_history,
                     
                     # --- Embed the Motion actuator forces into the save file! ---
-                    motion_lambda_history=getattr(app.solver, 'motion_lambda_history', np.zeros(0)),
+                    motion_lambda_history=motion_lambda_history,
                     
                     dt=np.array([app.simulation_dt])
                 )
@@ -457,7 +471,7 @@ class ProjectManager:
                 else:
                     # For standard forces, safely load the expression (fallback to "magnitude" for very old saves)
                     expr_str = f_data.get("expression_str", str(f_data.get("magnitude", "0.0")))
-                    new_f.compile_expression(expr_str)
+                    new_f.compile_expression(expr_str, base_dir=getattr(app, 'working_dir', None))
                     new_f.visible = f_data.get("visible", True)
                     # --- Only add Custom Forces to the Tree! ---
                     QTreeWidgetItem(app.node_forces, [new_f.name])
@@ -557,6 +571,9 @@ class ProjectManager:
             cp.friction_enabled = c_data.get("friction_enabled", False)
             cp.mu = c_data.get("mu", 0.3)
             cp.slip_tolerance = c_data.get("slip_tolerance", 0.01)
+            # Older save files predate this upgrade, so default both to enabled.
+            cp.symmetric_contact_search = c_data.get("symmetric_contact_search", True)
+            cp.contact_candidate_reduction_enabled = c_data.get("contact_candidate_reduction_enabled", True)
             cp.enabled = c_data.get("enabled", True)
             
             app.contact_pairs.append(cp)
@@ -623,7 +640,7 @@ class ProjectManager:
                 )
                 
                 # Recompile the math string safely
-                new_motion.compile_expression(m_data.get("expression_str", "0.0"))
+                new_motion.compile_expression(m_data.get("expression_str", "0.0"), base_dir=getattr(app, 'working_dir', None))
                 new_motion.enabled = m_data.get("enabled", True)
                 
                 app.motions_list.append(new_motion)
@@ -703,15 +720,28 @@ class ProjectManager:
                     
                     # Inject the mathematical memory
                     app.solver.simulation_history = npz['simulation_history']
-                    app.solver.lambda_history = npz['lambda_history']
-                    app.solver.contact_history = npz['contact_history']
+                    if 'time_history' in npz:
+                        app.solver.time_history = np.array(npz['time_history'], copy=True)
+                    else:
+                        app.solver.time_history = np.arange(len(app.solver.simulation_history), dtype=float) * app.simulation_dt
+
+                    diagnostics_ready = bool(npz['diagnostics_ready'][0]) if 'diagnostics_ready' in npz else False
+                    app.solver._clear_postprocess_histories()
+
+                    if diagnostics_ready:
+                        actual_frames = len(app.solver.simulation_history)
+                        lambda_history = np.array(npz['lambda_history'], copy=True)
+                        contact_history = np.array(npz['contact_history'], copy=True)
+                        gear_lambda_history = np.array(npz['gear_lambda_history'], copy=True) if 'gear_lambda_history' in npz else np.zeros((actual_frames, 0))
+                        motion_lambda_history = np.array(npz['motion_lambda_history'], copy=True) if 'motion_lambda_history' in npz else np.zeros((actual_frames, 0))
+
+                        if lambda_history.shape[0] == actual_frames and contact_history.shape[0] == actual_frames:
+                            app.solver.lambda_history = lambda_history
+                            app.solver.contact_history = contact_history
+                            app.solver.gear_lambda_history = gear_lambda_history
+                            app.solver.motion_lambda_history = motion_lambda_history
+                            app.solver.diagnostics_ready = True
                     
-                    # --- Unpack the Gear Forces ---
-                    if 'gear_lambda_history' in npz:
-                        app.solver.gear_lambda_history = npz['gear_lambda_history']
-                    # --- Unpack the Motion Actuator Forces ---
-                    if 'motion_lambda_history' in npz:
-                        app.solver.motion_lambda_history = npz['motion_lambda_history']    
                 # --------------------------------------------------------------------
                 
                 # Instantly unlock the Playback UI!

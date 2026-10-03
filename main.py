@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.1
+#  Version: 2026.10.0
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
@@ -58,12 +58,13 @@ from PySide6.QtCore import QTimer, QEvent, Qt, QObject, Signal, QUrl, QByteArray
 from unit_springs import CompressionSpring, TorsionSpring, Bushing 
 from unit_project import ProjectManager
 from unit_motions import JointMotion, MotionTransRot, MotionType
+from unit_spline import SplineDataError, SplineEditorDialog, is_spline_expression, load_spline_expression
 from math_kernels import warm_up_numba_kernels
 
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
 APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.09.1"
+APP_VERSION = "2026.10.0"
 APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
@@ -395,12 +396,14 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnAddForceTorque.clicked.connect(self.add_custom_force)
         self.ui.btnDelForceTorque.clicked.connect(self.delete_custom_force)
         # --- Actuator Toggle ---
-        self.ui.chkActuatorMode.toggled.connect(self.ui.frmActuatorSettings.setEnabled)
+        self.ui.chkActuatorMode.toggled.connect(self.on_force_actuator_mode_changed)
         
         self.ui.chkEnabledForce.toggled.connect(self.toggle_force_enabled)  
         self.ui.cmbForceType.currentIndexChanged.connect(self.on_force_type_changed)
         self.ui.btnUpdateForceTorque.clicked.connect(self.update_custom_force) 
         self.ui.btnRenameForce.clicked.connect(self.rename_force)
+        if hasattr(self.ui, 'btnSplineForce'):
+            self.ui.btnSplineForce.clicked.connect(self.open_force_spline_dialog)
         # --- UI Connections: Forces, Torques, and Actuators ---
         # 0 = Force, 1 = Torque
         self.ui.btnForce.clicked.connect(lambda: self.prepare_new_force(0, is_actuator=False))
@@ -440,6 +443,8 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnDelMotion.clicked.connect(self.delete_motion)
         self.ui.btnRenameMotion.clicked.connect(self.rename_motion)
         self.ui.chkEnabledMotion.toggled.connect(self.toggle_motion_enabled)
+        if hasattr(self.ui, 'btnSplineMotion'):
+            self.ui.btnSplineMotion.clicked.connect(self.open_motion_spline_dialog)
         
         # --- UI Button Connections ---
         self.ui.btnSolve.clicked.connect(self.run_physics_simulation)  
@@ -546,6 +551,7 @@ class PhysicsEngineMain(QMainWindow):
            
         # Initialize default label
         self.update_speed_label(self.ui.hslAnimSpeed.value())
+        self.on_force_actuator_mode_changed(self.ui.chkActuatorMode.isChecked())
            
         # Engine Memory
         self.physics_bodies = {}    
@@ -1905,6 +1911,7 @@ class PhysicsEngineMain(QMainWindow):
                 # --- Setup Actuator Mode UI ---
                 is_actuator = force.force_type in (ForceType.E_MOTOR, ForceType.ACTUATOR)
                 self.ui.chkActuatorMode.setChecked(is_actuator)
+                self._update_force_spline_availability()
                 
                 if is_actuator:
                     # Convert rad/s -> RPM OR m/s -> mm/s for the UI display
@@ -2083,6 +2090,15 @@ class PhysicsEngineMain(QMainWindow):
                 # Fallback to 0 (Standard) if mesh_mode isn't found in older saves
                 self.ui.cmbContactMesh.setCurrentIndex(getattr(contact, 'mesh_mode', 0))
                 self.ui.cmbContactMesh.blockSignals(False)
+            
+            # --- Load Narrow-Phase Tuning Checkboxes Safely ---
+            self.ui.chkSymmetricContact.blockSignals(True)
+            self.ui.chkSymmetricContact.setChecked(getattr(contact, 'symmetric_contact_search', True))
+            self.ui.chkSymmetricContact.blockSignals(False)
+            
+            self.ui.chkCandidateReduction.blockSignals(True)
+            self.ui.chkCandidateReduction.setChecked(getattr(contact, 'contact_candidate_reduction_enabled', True))
+            self.ui.chkCandidateReduction.blockSignals(False)
     
         # --- Double-click on a Gear Constraint ---
         elif hasattr(self, 'gear_pairs_list') and any(g.name == item_name for g in self.gear_pairs_list):
@@ -2179,6 +2195,18 @@ class PhysicsEngineMain(QMainWindow):
         # 4) Display the Dock (if closed) and open the Joint Page
         self.ui.stckProperties.setCurrentIndex(12)
         self.ui.dckProperties.show()
+
+    def open_motion_spline_dialog(self):
+        """Opens a spline preview dialog for the motion function field."""
+        initial_expr = self.ui.Edit_MotionFunction.text().strip()
+        dialog = SplineEditorDialog(
+            base_dir=self.working_dir,
+            initial_expression=initial_expr if is_spline_expression(initial_expr) else None,
+            title="Motion Spline",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_expression:
+            self.ui.Edit_MotionFunction.setText(dialog.selected_expression)
     
     def on_motion_trans_rot_changed(self, index):
         """ Updates the Motion function unit label dynamically based on ComboBox selection. """
@@ -2237,6 +2265,7 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.Edit_MaxActuatorSpeed.setText("0.0")
         self.ui.Edit_ActPowerLimit.setText("0.000")
         self.ui.chkAllowActuatorBraking.setChecked(True)
+        self._update_force_spline_availability()
         
         self.ui.chkEnabledForce.blockSignals(True)
         self.ui.chkEnabledForce.setChecked(True)
@@ -2260,6 +2289,32 @@ class PhysicsEngineMain(QMainWindow):
             
         self.ui.dckProperties.show()
         self.ui.stckProperties.setCurrentIndex(3)
+
+    def _update_force_spline_availability(self):
+        """Disables spline selection when actuator or e-motor mode is active."""
+        if hasattr(self.ui, 'btnSplineForce'):
+            self.ui.btnSplineForce.setEnabled(not self.ui.chkActuatorMode.isChecked())
+
+    def on_force_actuator_mode_changed(self, checked):
+        """Keeps the actuator settings frame and spline button synchronized."""
+        self.ui.frmActuatorSettings.setEnabled(checked)
+        self._update_force_spline_availability()
+
+    def open_force_spline_dialog(self):
+        """Opens a spline preview dialog for the force or torque expression field."""
+        if self.ui.chkActuatorMode.isChecked():
+            QMessageBox.warning(self, "Spline Not Available", "Spline functions are not available for Actuator or E-Motor modes.")
+            return
+
+        initial_expr = self.ui.Edit_ForceValue.text().strip()
+        dialog = SplineEditorDialog(
+            base_dir=self.working_dir,
+            initial_expression=initial_expr if is_spline_expression(initial_expr) else None,
+            title="Force / Torque Spline",
+            parent=self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_expression:
+            self.ui.Edit_ForceValue.setText(dialog.selected_expression)
         
     def toggle_joint_enabled(self, state):
         if not self.selected_joint: return
@@ -3258,7 +3313,7 @@ class PhysicsEngineMain(QMainWindow):
             alpha=baumgarte_val,
             beta=baumgarte_val
         )
-        
+
         # --- Smart extraction of Advanced Tolerances ---
         try:
             # Slices "1e-3 (Default)" -> "1e-3" -> 0.001
@@ -3320,7 +3375,8 @@ class PhysicsEngineMain(QMainWindow):
                 t_end, 
                 dt, 
                 integrator=active_integrator, 
-                progress_callback=update_progress
+                progress_callback=update_progress,
+                post_process=False
             )
             
             print("Simulation solved and recorded successfully! Ready for playback.")
@@ -3627,6 +3683,11 @@ class PhysicsEngineMain(QMainWindow):
         is_actuator = self.ui.chkActuatorMode.isChecked()
         allow_braking = self.ui.chkAllowActuatorBraking.isChecked()
         speed_max_si = 0.0
+        expr_text = self.ui.Edit_ForceValue.text().strip()
+
+        if is_actuator and is_spline_expression(expr_text):
+            QMessageBox.warning(self, "Spline Not Available", "Spline functions are not available for Actuator or E-Motor modes.")
+            return
         
         if is_actuator:
             new_f_type = ForceType.E_MOTOR if is_torque else ForceType.ACTUATOR
@@ -3666,7 +3727,10 @@ class PhysicsEngineMain(QMainWindow):
         force.allow_braking = allow_braking
         
         # --- Compile the new math expression! ---
-        force.compile_expression(self.ui.Edit_ForceValue.text())
+        compile_ok = force.compile_expression(expr_text, base_dir=self.working_dir)
+        if is_spline_expression(expr_text) and not compile_ok:
+            QMessageBox.warning(self, "Spline Data", "Failed to load the spline data file for this Force / Torque.")
+            return
 
         # 4. Rebuild 3D Geometry if the fundamental type changed
         if old_f_type != new_f_type:
@@ -3738,6 +3802,7 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.lblNNm.setText('Value, N')
             self.ui.btnAddForceTorque.setText('Create Force')
             self.ui.lblSpeedUnit.setText('Max Speed, mm/s')
+        self._update_force_spline_availability()
             
     def toggle_force_enabled(self, state):
         """ Toggles the physical state of the selected custom force. """
@@ -4909,6 +4974,11 @@ class PhysicsEngineMain(QMainWindow):
         is_actuator = self.ui.chkActuatorMode.isChecked()
         allow_braking = self.ui.chkAllowActuatorBraking.isChecked()
         speed_max_si = 0.0
+        expr_text = self.ui.Edit_ForceValue.text().strip()
+
+        if is_actuator and is_spline_expression(expr_text):
+            QMessageBox.warning(self, "Spline Not Available", "Spline functions are not available for Actuator or E-Motor modes.")
+            return
         
         if is_actuator:
             f_type = ForceType.E_MOTOR if is_torque else ForceType.ACTUATOR
@@ -4963,7 +5033,10 @@ class PhysicsEngineMain(QMainWindow):
             fixed_in=f_frame, position=local_pos, vector=final_vec, plotter=self.plotter
         )
         # --- Compile the math expression! ---
-        new_force.compile_expression(self.ui.Edit_ForceValue.text())
+        compile_ok = new_force.compile_expression(expr_text, base_dir=self.working_dir)
+        if is_spline_expression(expr_text) and not compile_ok:
+            QMessageBox.warning(self, "Spline Data", "Failed to load the spline data file for this Force / Torque.")
+            return
         
         new_force.allow_braking = allow_braking
         new_force.speed_max = speed_max_si
@@ -5008,6 +5081,17 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.Edit_ForceValue.setStyleSheet("background-color: #ffcccc; color: black;") 
             return
 
+        if is_spline_expression(expr_str):
+            if self.ui.chkActuatorMode.isChecked():
+                self.ui.Edit_ForceValue.setStyleSheet("background-color: #ffcccc; color: black;")
+                return
+            try:
+                load_spline_expression(expr_str, base_dir=self.working_dir)
+                self.ui.Edit_ForceValue.setStyleSheet("")
+            except SplineDataError:
+                self.ui.Edit_ForceValue.setStyleSheet("background-color: #ffcccc; color: black;")
+            return
+
         def custom_step(x, x0, h0, x1, h1): return 0.0
         def custom_if(x, e1, e2): return 0.0
         safe_dict = { "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan, "pi": np.pi, "exp": np.exp, "sqrt": np.sqrt, "abs": np.abs, "step": custom_step, "STEP": custom_step, "IF": custom_if, "__builtins__": None }
@@ -5032,6 +5116,14 @@ class PhysicsEngineMain(QMainWindow):
         expr_str = text.strip()
         if not expr_str:
             self.ui.Edit_MotionFunction.setStyleSheet("background-color: #ffcccc; color: black;") 
+            return
+
+        if is_spline_expression(expr_str):
+            try:
+                load_spline_expression(expr_str, base_dir=self.working_dir)
+                self.ui.Edit_MotionFunction.setStyleSheet("")
+            except SplineDataError:
+                self.ui.Edit_MotionFunction.setStyleSheet("background-color: #ffcccc; color: black;")
             return
 
         def custom_step(x, x0, h0, x1, h1): return 0.0
@@ -5598,6 +5690,10 @@ class PhysicsEngineMain(QMainWindow):
         if hasattr(self.ui, 'cmbContactMesh'):
             self.ui.cmbContactMesh.setCurrentIndex(0)
         
+        # --- Reset Narrow-Phase Tuning Checkboxes ---
+        self.ui.chkSymmetricContact.setChecked(True)
+        self.ui.chkCandidateReduction.setChecked(True)
+        
         self.ui.chkEnabledContact.blockSignals(True)
         self.ui.chkEnabledContact.setChecked(True)
         self.ui.chkEnabledContact.blockSignals(False)
@@ -5641,6 +5737,10 @@ class PhysicsEngineMain(QMainWindow):
             # --- Extract Mesh Simplification Mode ---
             m_mode = self.ui.cmbContactMesh.currentIndex() if hasattr(self.ui, 'cmbContactMesh') else 0
             
+            # --- Extract Narrow-Phase Tuning Checkboxes ---
+            symmetric_search = self.ui.chkSymmetricContact.isChecked()
+            candidate_reduction = self.ui.chkCandidateReduction.isChecked()
+            
         except ValueError: 
             print("Error: Invalid numerical values for contact parameters.")
             return
@@ -5662,7 +5762,9 @@ class PhysicsEngineMain(QMainWindow):
             friction_enabled=frict_on,  
             mu=mu_val,                  
             slip_tol_ui=slip_val,   
-            mesh_mode=m_mode       
+            mesh_mode=m_mode,
+            symmetric_contact_search=symmetric_search,
+            contact_candidate_reduction_enabled=candidate_reduction
         )
         
         self.contact_pairs.append(new_contact)
@@ -5696,6 +5798,10 @@ class PhysicsEngineMain(QMainWindow):
             
             # --- Update Mesh Mode Property ---
             contact.mesh_mode = m_mode
+            
+            # --- Update Narrow-Phase Tuning Properties ---
+            contact.symmetric_contact_search = self.ui.chkSymmetricContact.isChecked()
+            contact.contact_candidate_reduction_enabled = self.ui.chkCandidateReduction.isChecked()
             
             contact.exponent = n_exp
             # UI (N/mm^n) -> SI (N/m^n)
@@ -6025,6 +6131,12 @@ class PhysicsEngineMain(QMainWindow):
         """ Launches the Post-Processor if simulation results exist. """
         if getattr(self, 'solver', None) is None or getattr(self.solver, 'simulation_history', None) is None:
             QMessageBox.warning(self, "No Data", "Please run or load a simulation before opening Telemetry.")
+            return
+
+        try:
+            self.solver.ensure_postprocessed(self.simulation_dt)
+        except Exception as exc:
+            QMessageBox.critical(self, "Telemetry Error", f"Could not prepare telemetry histories:\n{exc}")
             return
 
         from unit_telemetry import TelemetryWindow
@@ -6750,7 +6862,10 @@ class PhysicsEngineMain(QMainWindow):
             m_name = f"{prefix}Motion_{counter}"
 
         new_motion = JointMotion(m_name, joint, trans_rot_idx, motion_type_idx)
-        new_motion.compile_expression(math_expr)
+        compile_ok = new_motion.compile_expression(math_expr, base_dir=self.working_dir)
+        if is_spline_expression(math_expr) and not compile_ok:
+            QMessageBox.warning(self, "Spline Data", "Failed to load the spline data file for this Motion.")
+            return
         
         # ==========================================
         # --- INITIAL CONDITION PROTECTIONS ---
@@ -6821,7 +6936,11 @@ class PhysicsEngineMain(QMainWindow):
         
         motion.trans_rot = MotionTransRot(trans_rot_idx)
         motion.motion_type = MotionType(self.ui.cmbMotionType.currentIndex())
-        motion.compile_expression(self.ui.Edit_MotionFunction.text().strip())
+        motion_expr = self.ui.Edit_MotionFunction.text().strip()
+        compile_ok = motion.compile_expression(motion_expr, base_dir=self.working_dir)
+        if is_spline_expression(motion_expr) and not compile_ok:
+            QMessageBox.warning(self, "Spline Data", "Failed to load the spline data file for this Motion.")
+            return
         
         # ==========================================
         # --- INITIAL CONDITION PROTECTIONS ---

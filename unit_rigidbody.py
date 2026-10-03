@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_rigidbody.py
 #  Description:
 #      Computes and stores the exact physical properties of mechanical parts, including mass, 
@@ -197,6 +197,13 @@ class RigidBody:
         xmin, xmax = bounds[0] / MMtoM, bounds[1] / MMtoM
         ymin, ymax = bounds[2] / MMtoM, bounds[3] / MMtoM
         zmin, zmax = bounds[4] / MMtoM, bounds[5] / MMtoM
+
+        min_corner = np.array([xmin, ymin, zmin])
+        max_corner = np.array([xmax, ymax, zmax])
+
+        # Cache the local box center/extents so global AABBs can be updated cheaply.
+        self.local_aabb_center = 0.5 * (min_corner + max_corner)
+        self.local_aabb_half_extents = 0.5 * (max_corner - min_corner)
         
         # Store the 8 corners of the perfect mathematical box
         self.local_corners = np.array([
@@ -208,15 +215,15 @@ class RigidBody:
 
     def get_global_aabb(self):
         """ Calculates the dynamic Axis-Aligned Bounding Box (AABB) in global space. """
-        if self.is_ground or getattr(self, 'local_corners', None) is None:
+        if self.is_ground or getattr(self, 'local_aabb_center', None) is None or getattr(self, 'local_aabb_half_extents', None) is None:
             return None, None
         
-        # Instantly transform the 8 corners using the current physics rotation and CoG
-        global_corners = (self.principal_axes @ self.local_corners.T).T + self.cog
-        
-        # Find the absolute min and max spatial coordinates
-        min_xyz = np.min(global_corners, axis=0)
-        max_xyz = np.max(global_corners, axis=0)
+        # Update the world-space AABB from the local box center/extents.
+        global_center = self.principal_axes @ self.local_aabb_center + self.cog
+        global_half_extents = np.abs(self.principal_axes) @ self.local_aabb_half_extents
+
+        min_xyz = global_center - global_half_extents
+        max_xyz = global_center + global_half_extents
         
         return min_xyz, max_xyz    
     

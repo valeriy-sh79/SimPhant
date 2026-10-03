@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_forces.py
 #  Description:
 #      Defines the Force class and related enumerations for handling various types of forces and torques
@@ -29,6 +29,8 @@
 import numpy as np
 from enum import Enum
 import pyvista as pv
+
+from unit_spline import SplineDataError, load_spline_expression, parse_spline_expression, format_spline_expression
 
 MMtoM = 1000.0
 
@@ -68,6 +70,7 @@ class Force:
         # --- NEW: Time-Dependent Math Expression Logic ---
         self.magnitude_expr = str(mag)
         self._eval_func = lambda t: self.magnitude
+        self.spline_file_path = None
         
         self.speed_max = 0.0  
         self.allow_braking = True  
@@ -80,9 +83,10 @@ class Force:
         
         self.create_visuals()
         
-    def compile_expression(self, expr_str):
+    def compile_expression(self, expr_str, base_dir=None):
         """ Compiles a UI text string into a high-speed lambda function. """
         self.magnitude_expr = expr_str.strip()
+        self.spline_file_path = None
         
         # --- THE FIX: Convert UI Nmm to SI Nm for Torques and E-Motors! ---
         scale_factor = 0.001 if self.force_type in [ForceType.TORQUE, ForceType.E_MOTOR] else 1.0
@@ -107,6 +111,22 @@ class Force:
             "IF": custom_if,                          
             "__builtins__": None 
         }
+
+        spline_path = parse_spline_expression(self.magnitude_expr)
+        if spline_path is not None:
+            try:
+                spline_func, resolved_path, _, _ = load_spline_expression(self.magnitude_expr, base_dir=base_dir)
+                self.is_constant = False
+                self.magnitude = 0.0
+                self.spline_file_path = resolved_path
+                self.magnitude_expr = format_spline_expression(resolved_path)
+                self._eval_func = lambda t: spline_func(t) * scale_factor
+                return True
+            except SplineDataError as e:
+                print(f"Warning: Invalid spline expression '{self.magnitude_expr}' for '{self.name}': {e}")
+                self.magnitude = 0.0
+                self._eval_func = lambda t: 0.0
+                return False
         
         try:
             # 1. Try raw flat numerical conversion first
@@ -116,6 +136,7 @@ class Force:
             self.magnitude = val * scale_factor
             self.is_constant = True
             self._eval_func = lambda t: self.magnitude
+            return True
             
         except ValueError:
             # 2. Parse as a dynamic math function
@@ -135,11 +156,13 @@ class Force:
                 
                 # --- Wrap it to dynamically scale to SI at runtime! ---
                 self._eval_func = lambda t: func(t) * scale_factor
+                return True
                 
             except Exception as e:
                 print(f"Warning: Invalid math expression '{self.magnitude_expr}' for '{self.name}'. Defaulting to 0.0.")
                 self.magnitude = 0.0
                 self._eval_func = lambda t: 0.0
+                return False
 
     def set_visible(self, is_visible):
         """ Instantly toggles the 3D arrow/torus visibility """

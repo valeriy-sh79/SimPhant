@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_telemetry.py
 #  Description:
 #      Provides a graphical interface for post-processing and visualizing telemetry data 
@@ -433,25 +433,20 @@ class TelemetryWindow(QMainWindow):
             if "Position X" in var_name: y_array = self.solver.simulation_history[:, pos_start + 0]
             elif "Position Y" in var_name: y_array = self.solver.simulation_history[:, pos_start + 1]
             elif "Position Z" in var_name: y_array = self.solver.simulation_history[:, pos_start + 2]
-            # --- Angular Positions (Unwrapped Euler Angles) ---
+            # --- Angular Positions (Integrated Local Angular Velocity) ---
             elif "Angular Pos" in var_name:
-                from scipy.spatial.transform import Rotation
-                qx = self.solver.simulation_history[:, pos_start + 3]
-                qy = self.solver.simulation_history[:, pos_start + 4]
-                qz = self.solver.simulation_history[:, pos_start + 5]
-                qw = self.solver.simulation_history[:, pos_start + 6]
-                
-                # SciPy strictly uses scalar-last quaternion format: [x, y, z, w]
-                quats = np.vstack((qx, qy, qz, qw)).T
-                rotations = Rotation.from_quat(quats)
-
-                # Accumulate frame-to-frame global rotation increments to avoid
-                # Euler singularities and branch flips for simple revolute motion.
-                delta_rotations = rotations[1:] * rotations[:-1].inv()
-                cumulative_angles = np.vstack((
-                    np.zeros(3),
-                    np.cumsum(delta_rotations.as_rotvec(), axis=0)
-                ))
+                local_omega = self.solver.simulation_history[:, vel_start + 3:vel_start + 6]
+                if len(local_omega) <= 1:
+                    cumulative_angles = np.zeros((len(local_omega), 3))
+                else:
+                    # Trapezoidal integration keeps the angle channels aligned
+                    # with the solver's stored local angular velocities even for
+                    # very fast spins where orientation differencing can alias.
+                    delta_angles = 0.5 * (local_omega[1:] + local_omega[:-1]) * self.dt
+                    cumulative_angles = np.vstack((
+                        np.zeros(3),
+                        np.cumsum(delta_angles, axis=0)
+                    ))
                 
                 if "Roll_X" in var_name: y_array = cumulative_angles[:, 0]
                 elif "Pitch_Y" in var_name: y_array = cumulative_angles[:, 1]
