@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: math_kernels.py
 #  Description:
 #      Provides optimized mathematical kernels for multibody dynamics simulations, including
@@ -238,6 +238,80 @@ def solve_kkt_system_numba(M, Phi_q, Q, gamma_star, epsilon):
     return lambdas
 
 
+@njit(fastmath=True)
+def apply_contact_manifold_numba(row_pen, row_tar,
+                                 pen_cog, tar_cog,
+                                 pen_velocity, tar_velocity,
+                                 w_pen_glob, w_tar_glob,
+                                 pen_rot_t, tar_rot_t,
+                                 points_glob, normals_glob, depths,
+                                 stiffness, exponent, damping,
+                                 friction_enabled, mu, slip_tolerance,
+                                 Q):
+    """Applies one contact manifold into Q and returns accumulated scalar contact forces."""
+    total_f_spring = 0.0
+    total_f_damp = 0.0
+    total_f_normal = 0.0
+    total_f_friction = 0.0
+
+    for idx in range(depths.shape[0]):
+        p_glob = points_glob[idx]
+        n_glob = normals_glob[idx]
+        depth = depths[idx]
+
+        r_pen = p_glob - pen_cog
+        r_tar = p_glob - tar_cog
+
+        v_pen_point = pen_velocity + np.cross(w_pen_glob, r_pen)
+        v_tar_point = tar_velocity + np.cross(w_tar_glob, r_tar)
+
+        v_rel = v_pen_point - v_tar_point
+        v_rel_normal = np.dot(v_rel, n_glob)
+        v_rel_tangent = v_rel - (v_rel_normal * n_glob)
+        v_slip = np.linalg.norm(v_rel_tangent)
+
+        f_spring = stiffness * (depth ** exponent)
+        f_damp = -damping * v_rel_normal * depth
+        f_mag_normal = f_spring + f_damp
+        if f_mag_normal < 0.0:
+            f_mag_normal = 0.0
+
+        f_frict_glob = np.zeros(3)
+        f_mag_friction = 0.0
+
+        if friction_enabled and v_slip > 1e-6 and mu > 0.0:
+            mu_eff = mu * np.tanh(v_slip / slip_tolerance)
+            f_mag_friction = mu_eff * f_mag_normal
+            frict_dir = -v_rel_tangent / v_slip
+            f_frict_glob = frict_dir * f_mag_friction
+
+        f_pen_glob = (n_glob * f_mag_normal) + f_frict_glob
+        f_tar_glob = -f_pen_glob
+
+        total_f_spring += f_spring
+        total_f_damp += f_damp
+        total_f_normal += f_mag_normal
+        total_f_friction += f_mag_friction
+
+        if row_pen >= 0:
+            for axis in range(3):
+                Q[row_pen + axis] += f_pen_glob[axis]
+            t_pen = np.cross(r_pen, f_pen_glob)
+            t_pen_loc = pen_rot_t @ t_pen
+            for axis in range(3):
+                Q[row_pen + 3 + axis] += t_pen_loc[axis]
+
+        if row_tar >= 0:
+            for axis in range(3):
+                Q[row_tar + axis] += f_tar_glob[axis]
+            t_tar = np.cross(r_tar, f_tar_glob)
+            t_tar_loc = tar_rot_t @ t_tar
+            for axis in range(3):
+                Q[row_tar + 3 + axis] += t_tar_loc[axis]
+
+    return total_f_spring, total_f_damp, total_f_normal, total_f_friction
+
+
 def warm_up_numba_kernels():
     """Precompiles the Numba kernels used by the constrained solver."""
     global _NUMBA_WARMED_UP
@@ -321,5 +395,29 @@ def warm_up_numba_kernels():
     Q = np.zeros(2, dtype=np.float64)
     gamma_star = np.zeros(1, dtype=np.float64)
     solve_kkt_system_numba(M, Phi_q, Q, gamma_star, 1e-7)
+
+    contact_Q = np.zeros(12, dtype=np.float64)
+    apply_contact_manifold_numba(
+        0,
+        6,
+        np.zeros(3, dtype=np.float64),
+        np.array([0.0, 0.0, -0.01], dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+        np.eye(3, dtype=np.float64),
+        np.eye(3, dtype=np.float64),
+        np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([[0.0, 0.0, 1.0]], dtype=np.float64),
+        np.array([0.001], dtype=np.float64),
+        1e5,
+        1.5,
+        10.0,
+        True,
+        0.3,
+        0.01,
+        contact_Q,
+    )
 
     _NUMBA_WARMED_UP = True

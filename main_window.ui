@@ -2977,7 +2977,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
             </item>
             <item>
              <layout class="QGridLayout" name="gridLayout_14">
-              <item row="0" column="0" colspan="3">
+              <item row="0" column="0" colspan="2">
                <widget class="QComboBox" name="cmbForceType">
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define whether the Force or Torque is being applied&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -3006,7 +3006,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                 </item>
                </widget>
               </item>
-              <item row="0" column="3" colspan="3">
+              <item row="0" column="2" colspan="2">
                <widget class="QComboBox" name="cmbSpaceBody">
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define if the Force/Torque is dynamically constrained to the Space or to the Body. &lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -3042,7 +3042,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                 </property>
                </widget>
               </item>
-              <item row="1" column="1" colspan="4">
+              <item row="1" column="1" colspan="2">
                <widget class="QLineEdit" name="Edit_ForceValue">
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the Force / Torque Value.&lt;/p&gt;&lt;p&gt;User-defined time dependent function f(t) is supported.&lt;/p&gt;&lt;p&gt;The Force / Torque can be defined as a combination of the math functions of time. &lt;/p&gt;&lt;p&gt;Following functions can be directly entered in the input field:&lt;/p&gt;&lt;p&gt;sin(t), cos(t), tan(t), sqrt(t) (Square root), exp(t) (Exponential), abs(t) (Absolute value), pi.&lt;/p&gt;&lt;p&gt;It is possible to use ‘np.’ to call any standard NumPy math function, for example:&lt;/p&gt;&lt;p&gt;np.cosh(t), np.round(t), np.sign(t), etc.&lt;/p&gt;&lt;p&gt;Following custom functions are supported in the program:&lt;/p&gt;&lt;p&gt;The STEP function changes smoothly between two specified values.&lt;/p&gt;&lt;p&gt;Syntax: step(t; t0; F0; t1; F1)&lt;/p&gt;&lt;p&gt;The IF function:&lt;/p&gt;&lt;p&gt;Syntax: if(&amp;lt;condition&amp;gt;; &amp;lt;value if less or equal to 0&amp;gt;; &amp;lt;value if greater than 0&amp;gt;).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -3052,7 +3052,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                 </property>
                </widget>
               </item>
-              <item row="1" column="5">
+              <item row="1" column="3">
                <widget class="QPushButton" name="btnUpdateForceTorque">
                 <property name="maximumSize">
                  <size>
@@ -3081,20 +3081,17 @@ li.checked::marker { content: &quot;\2612&quot;; }
                 </property>
                </widget>
               </item>
-              <item row="2" column="2" colspan="2">
-               <spacer name="horizontalSpacer_5">
-                <property name="orientation">
-                 <enum>Qt::Orientation::Horizontal</enum>
+              <item row="2" column="2">
+               <widget class="QPushButton" name="btnSplineForce">
+                <property name="toolTip">
+                 <string>Create new Force / Torque</string>
                 </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
+                <property name="text">
+                 <string>Spline</string>
                 </property>
-               </spacer>
+               </widget>
               </item>
-              <item row="2" column="4" colspan="2">
+              <item row="2" column="3">
                <widget class="QCheckBox" name="chkEnabledForce">
                 <property name="toolTip">
                  <string>Enable / Disable Force / Torque in the Simulation</string>
@@ -5495,6 +5492,32 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </widget>
             </item>
             <item>
+             <widget class="QCheckBox" name="chkSymmetricContact">
+              <property name="toolTip">
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enabled: solver checks both bodies of a contact pair as the penetrator. &lt;/p&gt;&lt;p&gt;Keep enabled for correct detection.&lt;/p&gt;&lt;p&gt;Disabled: solver checks smaller body of a contact pair as the penetrator.&lt;/p&gt;&lt;p&gt;Disabling is an experimental speed-up that can miss contacts on some geometries.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              </property>
+              <property name="text">
+               <string>Symmetric Contact Search</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="chkCandidateReduction">
+              <property name="toolTip">
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Merges duplicate nearby contact points before the proximity check to speed up dense contact patches. &lt;/p&gt;&lt;p&gt;Safe to leave enabled.&lt;/p&gt;&lt;p&gt;Disable only to debug or inspect raw contact candidates, solver speed is reduced in this case.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              </property>
+              <property name="text">
+               <string>Contact Candidate Reduction</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
              <widget class="Line" name="line_16">
               <property name="orientation">
                <enum>Qt::Orientation::Horizontal</enum>
@@ -6862,17 +6885,11 @@ li.checked::marker { content: &quot;\2612&quot;; }
                </widget>
               </item>
               <item row="0" column="1">
-               <spacer name="horizontalSpacer_22">
-                <property name="orientation">
-                 <enum>Qt::Orientation::Horizontal</enum>
+               <widget class="QPushButton" name="btnSplineMotion">
+                <property name="text">
+                 <string>Spline</string>
                 </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
+               </widget>
               </item>
               <item row="0" column="2">
                <widget class="QCheckBox" name="chkEnabledMotion">

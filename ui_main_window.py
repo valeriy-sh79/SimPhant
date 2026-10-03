@@ -1257,7 +1257,7 @@ class Ui_MainWindow(object):
         self.cmbForceType.setObjectName(u"cmbForceType")
         self.cmbForceType.setEditable(False)
 
-        self.gridLayout_14.addWidget(self.cmbForceType, 0, 0, 1, 3)
+        self.gridLayout_14.addWidget(self.cmbForceType, 0, 0, 1, 2)
 
         self.cmbSpaceBody = QComboBox(self.grbForcesTorques)
         self.cmbSpaceBody.addItem("")
@@ -1265,7 +1265,7 @@ class Ui_MainWindow(object):
         self.cmbSpaceBody.setObjectName(u"cmbSpaceBody")
         self.cmbSpaceBody.setEditable(False)
 
-        self.gridLayout_14.addWidget(self.cmbSpaceBody, 0, 3, 1, 3)
+        self.gridLayout_14.addWidget(self.cmbSpaceBody, 0, 2, 1, 2)
 
         self.lblNNm = QLabel(self.grbForcesTorques)
         self.lblNNm.setObjectName(u"lblNNm")
@@ -1275,29 +1275,30 @@ class Ui_MainWindow(object):
         self.Edit_ForceValue = QLineEdit(self.grbForcesTorques)
         self.Edit_ForceValue.setObjectName(u"Edit_ForceValue")
 
-        self.gridLayout_14.addWidget(self.Edit_ForceValue, 1, 1, 1, 4)
+        self.gridLayout_14.addWidget(self.Edit_ForceValue, 1, 1, 1, 2)
 
         self.btnUpdateForceTorque = QPushButton(self.grbForcesTorques)
         self.btnUpdateForceTorque.setObjectName(u"btnUpdateForceTorque")
         self.btnUpdateForceTorque.setMaximumSize(QSize(36, 26))
         self.btnUpdateForceTorque.setIcon(icon2)
 
-        self.gridLayout_14.addWidget(self.btnUpdateForceTorque, 1, 5, 1, 1)
+        self.gridLayout_14.addWidget(self.btnUpdateForceTorque, 1, 3, 1, 1)
 
         self.btnAddForceTorque = QPushButton(self.grbForcesTorques)
         self.btnAddForceTorque.setObjectName(u"btnAddForceTorque")
 
         self.gridLayout_14.addWidget(self.btnAddForceTorque, 2, 0, 1, 2)
 
-        self.horizontalSpacer_5 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.btnSplineForce = QPushButton(self.grbForcesTorques)
+        self.btnSplineForce.setObjectName(u"btnSplineForce")
 
-        self.gridLayout_14.addItem(self.horizontalSpacer_5, 2, 2, 1, 2)
+        self.gridLayout_14.addWidget(self.btnSplineForce, 2, 2, 1, 1)
 
         self.chkEnabledForce = QCheckBox(self.grbForcesTorques)
         self.chkEnabledForce.setObjectName(u"chkEnabledForce")
         self.chkEnabledForce.setChecked(True)
 
-        self.gridLayout_14.addWidget(self.chkEnabledForce, 2, 4, 1, 2)
+        self.gridLayout_14.addWidget(self.chkEnabledForce, 2, 3, 1, 1)
 
 
         self.verticalLayout_16.addLayout(self.gridLayout_14)
@@ -2661,6 +2662,18 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_28.addWidget(self.cmbContactMesh)
 
+        self.chkSymmetricContact = QCheckBox(self.grbContacts)
+        self.chkSymmetricContact.setObjectName(u"chkSymmetricContact")
+        self.chkSymmetricContact.setChecked(True)
+
+        self.verticalLayout_28.addWidget(self.chkSymmetricContact)
+
+        self.chkCandidateReduction = QCheckBox(self.grbContacts)
+        self.chkCandidateReduction.setObjectName(u"chkCandidateReduction")
+        self.chkCandidateReduction.setChecked(True)
+
+        self.verticalLayout_28.addWidget(self.chkCandidateReduction)
+
         self.line_16 = QFrame(self.grbContacts)
         self.line_16.setObjectName(u"line_16")
         self.line_16.setFrameShape(QFrame.Shape.HLine)
@@ -3390,9 +3403,10 @@ class Ui_MainWindow(object):
 
         self.gridLayout_60.addWidget(self.btnAddMotion, 0, 0, 1, 1)
 
-        self.horizontalSpacer_22 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.btnSplineMotion = QPushButton(self.grbForcesTorques_2)
+        self.btnSplineMotion.setObjectName(u"btnSplineMotion")
 
-        self.gridLayout_60.addItem(self.horizontalSpacer_22, 0, 1, 1, 1)
+        self.gridLayout_60.addWidget(self.btnSplineMotion, 0, 1, 1, 1)
 
         self.chkEnabledMotion = QCheckBox(self.grbForcesTorques_2)
         self.chkEnabledMotion.setObjectName(u"chkEnabledMotion")
@@ -4116,6 +4130,10 @@ class Ui_MainWindow(object):
 #endif // QT_CONFIG(tooltip)
         self.btnAddForceTorque.setText(QCoreApplication.translate("MainWindow", u"Create Force", None))
 #if QT_CONFIG(tooltip)
+        self.btnSplineForce.setToolTip(QCoreApplication.translate("MainWindow", u"Create new Force / Torque", None))
+#endif // QT_CONFIG(tooltip)
+        self.btnSplineForce.setText(QCoreApplication.translate("MainWindow", u"Spline", None))
+#if QT_CONFIG(tooltip)
         self.chkEnabledForce.setToolTip(QCoreApplication.translate("MainWindow", u"Enable / Disable Force / Torque in the Simulation", None))
 #endif // QT_CONFIG(tooltip)
         self.chkEnabledForce.setText(QCoreApplication.translate("MainWindow", u"Enabled", None))
@@ -4579,6 +4597,14 @@ class Ui_MainWindow(object):
         self.cmbContactMesh.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define the Contact processing method:</p><p>1) Standard Mesh: original CAD geometry of the contacted Bodies is considered.</p><p>2) Fine Mesh: the Body mesh is subdivided to increase the accuracy of the contact processing. Note: Simulation time is increased.</p><p>3) Proxy Meshes (Convex Hulls) is for CAD models with internal holes, chamfers. Generation of the &quot;Convex Hull&quot; (shrink-wrapping the geometry) reduces fine meshed model to lower vertices, speeding up the collision math.</p><p>4) Decimation (Simplification): If a Convex Hull is too simple (e.g., we need the teeth of a gear to collide), we can use mesh decimation instead of subdivision.</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
 #if QT_CONFIG(tooltip)
+        self.chkSymmetricContact.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Enabled: solver checks both bodies of a contact pair as the penetrator. </p><p>Keep enabled for correct detection.</p><p>Disabled: solver checks smaller body of a contact pair as the penetrator.</p><p>Disabling is an experimental speed-up that can miss contacts on some geometries.</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.chkSymmetricContact.setText(QCoreApplication.translate("MainWindow", u"Symmetric Contact Search", None))
+#if QT_CONFIG(tooltip)
+        self.chkCandidateReduction.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Merges duplicate nearby contact points before the proximity check to speed up dense contact patches. </p><p>Safe to leave enabled.</p><p>Disable only to debug or inspect raw contact candidates, solver speed is reduced in this case.</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.chkCandidateReduction.setText(QCoreApplication.translate("MainWindow", u"Contact Candidate Reduction", None))
+#if QT_CONFIG(tooltip)
         self.chkContactFriction.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Activate / deactivate the Contact Friction (defined as Regularized Coulomb Friction)</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.chkContactFriction.setText(QCoreApplication.translate("MainWindow", u"Contact Friction", None))
@@ -4794,6 +4820,7 @@ class Ui_MainWindow(object):
         self.Edit_MotionFunction.setText(QCoreApplication.translate("MainWindow", u"1", None))
         self.btnUpdateMotion.setText("")
         self.btnAddMotion.setText(QCoreApplication.translate("MainWindow", u"Create Motion", None))
+        self.btnSplineMotion.setText(QCoreApplication.translate("MainWindow", u"Spline", None))
         self.chkEnabledMotion.setText(QCoreApplication.translate("MainWindow", u"Enabled", None))
         self.grbVisuals.setTitle(QCoreApplication.translate("MainWindow", u"Visuals Length, mm", None))
         self.lbl_RFLength.setText(QCoreApplication.translate("MainWindow", u"Reference Frames", None))

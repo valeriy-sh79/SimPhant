@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_motions.py
 #  Description:
 #      Formulates user-defined kinematic motion drivers (displacement, velocity, acceleration) 
@@ -29,6 +29,8 @@
 import numpy as np
 import re
 from enum import Enum
+
+from unit_spline import SplineDataError, load_spline_expression, parse_spline_expression, format_spline_expression
 
 class MotionTransRot(Enum):
     TRANSLATIONAL = 0
@@ -79,13 +81,28 @@ class JointMotion:
         self.enabled = True
         self.expression_str = "0.0"
         self.compiled_func = lambda t: 0.0
+        self.spline_file_path = None
 
-    def compile_expression(self, text):
+    def compile_expression(self, text, base_dir=None):
         """ Compiles a UI text string into a high-speed lambda function. """
         self.expression_str = text.strip()
+        self.spline_file_path = None
         if not self.expression_str:
             self.compiled_func = lambda t: 0.0
-            return
+            return True
+
+        spline_path = parse_spline_expression(self.expression_str)
+        if spline_path is not None:
+            try:
+                spline_func, resolved_path, _, _ = load_spline_expression(self.expression_str, base_dir=base_dir)
+                self.spline_file_path = resolved_path
+                self.expression_str = format_spline_expression(resolved_path)
+                self.compiled_func = spline_func
+                return True
+            except SplineDataError as e:
+                print(f"Error compiling spline motion expression '{self.expression_str}': {e}")
+                self.compiled_func = lambda t: 0.0
+                return False
 
         try:
             # 1. Replace ALL commas with dots (European decimals -> Python decimals)
@@ -98,9 +115,11 @@ class JointMotion:
             # Compile into a callable lambda function
             self.compiled_func = eval(f"lambda t: {safe_expr}", SAFE_DICT)
             self.compiled_func(0.0) # Test evaluate to catch syntax errors immediately
+            return True
         except Exception as e:
             print(f"Error compiling motion expression '{self.expression_str}': {e}")
             self.compiled_func = lambda t: 0.0
+            return False
 
     def get_kinematics(self, t):
         """
@@ -108,12 +127,19 @@ class JointMotion:
         Automatically handles unit conversion from UI to SI for the solver matrix.
         Returns: (position, velocity, acceleration)
         """
-        h = 1e-5 # Time step for CFD (10 microseconds gives extreme precision)
-        
-        # 1. Evaluate base function at t, t+h, and t-h
-        f0 = self.compiled_func(t)
-        fp = self.compiled_func(t + h)
-        fm = self.compiled_func(t - h)
+        if hasattr(self.compiled_func, 'evaluate_kinematics'):
+            f0, df, ddf = self.compiled_func.evaluate_kinematics(t)
+        else:
+            h = 1e-5 # Time step for CFD (10 microseconds gives extreme precision)
+            
+            # 1. Evaluate base function at t, t+h, and t-h
+            f0 = self.compiled_func(t)
+            fp = self.compiled_func(t + h)
+            fm = self.compiled_func(t - h)
+            
+            # 3. Central Finite Difference Math
+            df = (fp - fm) / (2.0 * h)
+            ddf = (fp - 2.0 * f0 + fm) / (h**2)
         
         # 2. Unit Conversion
         # UI Translational is defined in mm -> Solver strictly requires meters.
@@ -121,12 +147,8 @@ class JointMotion:
         scale = 0.001 if self.trans_rot == MotionTransRot.TRANSLATIONAL else 1.0
         
         f0 *= scale
-        fp *= scale
-        fm *= scale
-
-        # 3. Central Finite Difference Math
-        df = (fp - fm) / (2.0 * h)
-        ddf = (fp - 2.0 * f0 + fm) / (h**2)
+        df *= scale
+        ddf *= scale
 
         # 4. Route data based on user's definition choice
         if self.motion_type == MotionType.DISPLACEMENT:

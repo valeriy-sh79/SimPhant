@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.1
+#  Version: 2026.10.0
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
@@ -32,6 +32,7 @@ import os
 import csv
 import logging
 import warnings
+from time import perf_counter
 
 from integrators import CustomRK4, SciPyIntegrator
 from scipy.spatial.transform import Rotation
@@ -40,8 +41,13 @@ from unit_joints import JointType, GearType
 
 # By default, SciPy formats quaternions as [x, y, z, w] (scalar last).
 # We will strictly follow this convention to avoid mathematical bugs.
+# Orientation pipeline note:
+# - Per moving body, the solver state stores [X, Y, Z, qx, qy, qz, qw, Vx, Vy, Vz, Wx_loc, Wy_loc, Wz_loc].
+# - Quaternion time integration is implemented explicitly in get_quaternion_derivative_local() using local angular velocity.
+# - Quaternion <-> rotation-matrix conversions are delegated to scipy.spatial.transform.Rotation.
+# - Euler angles are derived only for UI/export helpers; body.principal_axes remains the authoritative body orientation.
 
-from math_kernels import solve_kkt_system_numba, assemble_jacobian_numba, assemble_gear_jacobian_numba
+from math_kernels import solve_kkt_system_numba, assemble_jacobian_numba, assemble_gear_jacobian_numba, apply_contact_manifold_numba
 
 class MBSolver:
     """ The Core Multibody Dynamics Solver (Hybrid Formulation) """
@@ -62,6 +68,10 @@ class MBSolver:
         self.epsilon = epsilon
         self.alpha = alpha
         self.beta = beta
+        # Symmetric search and candidate reduction are per-ContactPair properties now;
+        # these are just the shared tuning constants for the reduction voxel grid.
+        self.contact_candidate_reduction_threshold = 96
+        self.contact_candidate_voxel_size_m = 1e-3
         
         # 1. Filter out the ground AND disabled bodies. 
         self.moving_bodies = [b for b in physics_bodies.values() if not b.is_ground and b.enabled]
@@ -103,6 +113,197 @@ class MBSolver:
         self.current_lambdas = np.zeros(self.num_equations)
         # --- Immediate Abort Flag ---
         self.cancel_flag = False
+
+    def _reset_solver_profile(self):
+        """Resets per-run timing and contact counters used for profiling."""
+        self.solve_profile = {
+            'rhs_calls': 0,
+            'broadphase_time': 0.0,
+            'narrowphase_time': 0.0,
+            'active_contact_pairs_total': 0,
+            'active_contact_pairs_peak': 0,
+            'contact_points_total': 0,
+            'candidate_vertices_total': 0,
+            'candidate_vertices_reduced_total': 0,
+        }
+
+    def _get_solver_profile(self):
+        """Returns the active profiling dictionary, creating it on demand."""
+        if not hasattr(self, 'solve_profile'):
+            self._reset_solver_profile()
+        return self.solve_profile
+
+    def _log_solver_profile(self, total_solve_time, post_processing_time):
+        """Prints and logs a compact summary of the latest solver profile."""
+        profile = self._get_solver_profile()
+        summary = (
+            "Solver profile summary:\n"
+            f"  Total solve time: {total_solve_time:.3f} s\n"
+            f"  Total RHS call count: {profile['rhs_calls']}\n"
+            f"  Broadphase time: {profile['broadphase_time']:.3f} s\n"
+            f"  Narrow-phase time: {profile['narrowphase_time']:.3f} s\n"
+            f"  Active contact pairs processed (total / peak per RHS): "
+            f"{profile['active_contact_pairs_total']} / {profile['active_contact_pairs_peak']}\n"
+            f"  Candidate vertices queried (raw / reduced): "
+            f"{profile['candidate_vertices_total']} / {profile['candidate_vertices_reduced_total']}\n"
+            f"  Total contact points processed: {profile['contact_points_total']}\n"
+            f"  Post-processing time: {post_processing_time:.3f} s"
+        )
+        logging.info(summary)
+        print(summary)
+
+    def _clear_postprocess_histories(self):
+        """Clears derived telemetry histories until they are extracted explicitly."""
+        self.lambda_history = None
+        self.gear_lambda_history = None
+        self.contact_history = None
+        self.motion_lambda_history = None
+        self.diagnostics_ready = False
+
+    def _extract_result_diagnostics(self, time_history):
+        """Evaluates recorded frames to populate joint, gear, motion, and contact histories."""
+        actual_frames = len(self.simulation_history)
+
+        self.lambda_history = np.zeros((actual_frames, self.num_equations))
+        self.gear_lambda_history = np.zeros((actual_frames, self.num_gear_eq)) if hasattr(self, 'num_gear_eq') else np.zeros((actual_frames, 0))
+        self.contact_history = np.zeros((actual_frames, len(self.contact_pairs), 4))
+        self.motion_lambda_history = np.zeros((actual_frames, getattr(self, 'num_motion_eq', 0)))
+
+        print(f"Extracting Reaction Forces for {actual_frames} recorded frames...")
+
+        post_processing_start = perf_counter()
+        for i in range(actual_frames):
+            t = time_history[i]
+            Y_frame = self.simulation_history[i]
+
+            try:
+                self.evaluate_derivatives(t, Y_frame)
+            except Exception:
+                print(f"Post-processing stopped early at frame {i} due to math error.")
+                self.simulation_history = self.simulation_history[:i]
+                self.time_history = np.asarray(time_history[:i], dtype=float)
+                self.lambda_history = self.lambda_history[:i]
+                self.gear_lambda_history = self.gear_lambda_history[:i]
+                self.contact_history = self.contact_history[:i]
+                self.motion_lambda_history = self.motion_lambda_history[:i]
+                break
+
+            self.lambda_history[i, :] = self.current_lambdas
+
+            if hasattr(self, 'current_gear_lambdas'):
+                self.gear_lambda_history[i, :] = self.current_gear_lambdas
+            if hasattr(self, 'current_motion_lambdas'):
+                self.motion_lambda_history[i, :] = self.current_motion_lambdas
+
+            for idx, cp in enumerate(self.contact_pairs):
+                self.contact_history[i, idx, 0] = getattr(cp, 'current_F_spring', 0.0)
+                self.contact_history[i, idx, 1] = getattr(cp, 'current_F_damp', 0.0)
+                self.contact_history[i, idx, 2] = getattr(cp, 'current_F_total', 0.0)
+                self.contact_history[i, idx, 3] = getattr(cp, 'current_F_friction', 0.0)
+
+        self.diagnostics_ready = True
+        return perf_counter() - post_processing_start
+
+    def ensure_postprocessed(self, dt=None):
+        """Builds derived telemetry histories on demand when CSV export or Telemetry needs them."""
+        if getattr(self, 'simulation_history', None) is None:
+            raise RuntimeError("No simulation history is available for post-processing.")
+
+        if getattr(self, 'diagnostics_ready', False):
+            return 0.0
+
+        if getattr(self, 'time_history', None) is not None:
+            time_history = self.time_history
+        elif dt is not None:
+            time_history = np.arange(len(self.simulation_history), dtype=float) * dt
+        else:
+            raise RuntimeError("Time history is unavailable. Provide dt to extract telemetry on demand.")
+
+        print("Preparing telemetry histories on demand...")
+        self.prepare_runtime_evaluation_state()
+        elapsed = self._extract_result_diagnostics(time_history)
+        logging.info(f"Deferred post-processing complete in {elapsed:.3f} s")
+        return elapsed
+
+    def _build_collision_cache(self, body, mode):
+        """Builds the requested collision mesh once and stores meter-space vertices for the hot path."""
+        import trimesh
+
+        mesh_attr = f'collision_mesh_mode_{mode}'
+        verts_m_attr = f'collision_vertices_m_mode_{mode}'
+
+        if mode == 3:
+            collision_mesh = body.raw_geom.convex_hull
+        else:
+            if mode == 1:
+                clean_mesh = body.mesh.clean().subdivide(1, subfilter='linear')
+            elif mode == 2:
+                clean_mesh = body.mesh.clean().decimate(0.5)
+            else:
+                clean_mesh = body.mesh.clean()
+
+            verts = np.array(clean_mesh.points)
+            try:
+                faces = clean_mesh.faces.reshape((-1, 4))[:, 1:4]
+            except ValueError:
+                faces = clean_mesh.faces.reshape((-1, 3))
+
+            collision_mesh = trimesh.Trimesh(vertices=verts, faces=faces)
+
+        setattr(body, mesh_attr, collision_mesh)
+        setattr(body, verts_m_attr, np.asarray(collision_mesh.vertices, dtype=np.float64) * 0.001)
+
+    def _get_collision_cache(self, body, mode):
+        """Returns the prebuilt collision mesh and its cached meter-space vertices."""
+        mesh_attr = f'collision_mesh_mode_{mode}'
+        verts_m_attr = f'collision_vertices_m_mode_{mode}'
+        return getattr(body, mesh_attr), getattr(body, verts_m_attr)
+
+    def prepare_contact_collision_meshes(self):
+        """Prebuilds collision caches for all enabled contact pairs before integration starts."""
+        prepared = set()
+
+        for cp in self.contact_pairs:
+            if not cp.enabled or not cp.body_i.enabled or not cp.body_j.enabled:
+                continue
+
+            mode = getattr(cp, 'mesh_mode', 0)
+            for body in (cp.body_i, cp.body_j):
+                key = (id(body), mode)
+                if key in prepared:
+                    continue
+                self._build_collision_cache(body, mode)
+                prepared.add(key)
+
+    def _reduce_contact_candidates(self, points_glob_m, target_local_points_m, reduction_enabled=True):
+        """Deduplicates dense candidate vertices in small target-local voxels before proximity queries."""
+        if not reduction_enabled:
+            return points_glob_m, target_local_points_m
+
+        threshold = int(getattr(self, 'contact_candidate_reduction_threshold', 96))
+        if len(points_glob_m) <= threshold:
+            return points_glob_m, target_local_points_m
+
+        voxel_size = float(getattr(self, 'contact_candidate_voxel_size_m', 1e-4))
+        if voxel_size <= 0.0:
+            return points_glob_m, target_local_points_m
+
+        origin = np.min(target_local_points_m, axis=0)
+        voxel_keys = np.floor((target_local_points_m - origin) / voxel_size).astype(np.int64)
+        _, unique_indices = np.unique(voxel_keys, axis=0, return_index=True)
+
+        if len(unique_indices) == len(points_glob_m):
+            return points_glob_m, target_local_points_m
+
+        unique_indices = np.sort(unique_indices)
+        return points_glob_m[unique_indices], target_local_points_m[unique_indices]
+
+    def prepare_runtime_evaluation_state(self):
+        """Builds the derived arrays and caches that evaluate_derivatives expects."""
+        self.prepare_static_numba_data()
+        self.initialize_springs()
+        self.initialize_motions()
+        self.prepare_contact_collision_meshes()
         
     # ==========================================
     # --- PHASE 1: THE STATE MANAGER ---
@@ -655,6 +856,46 @@ class MBSolver:
                     
         return Q
 
+    def _apply_contact_manifold(self, cp, pen, tar, points_glob, normals_glob, depths, Q):
+        """Applies one penetrator-target contact manifold directly into the generalized force vector."""
+        if len(depths) == 0:
+            return
+
+        idx_pen = self.body_index_map.get(pen.name)
+        idx_tar = self.body_index_map.get(tar.name)
+        row_pen = idx_pen * 6 if idx_pen is not None else -1
+        row_tar = idx_tar * 6 if idx_tar is not None else -1
+
+        w_pen_glob = pen.principal_axes @ pen.angular_velocity
+        w_tar_glob = tar.principal_axes @ tar.angular_velocity
+        f_spring, f_damp, f_total, f_friction = apply_contact_manifold_numba(
+            row_pen,
+            row_tar,
+            pen.cog,
+            tar.cog,
+            pen.velocity,
+            tar.velocity,
+            w_pen_glob,
+            w_tar_glob,
+            pen.principal_axes.T,
+            tar.principal_axes.T,
+            points_glob,
+            normals_glob,
+            depths,
+            cp.stiffness,
+            cp.exponent,
+            cp.damping,
+            cp.friction_enabled,
+            cp.mu,
+            cp.slip_tolerance,
+            Q,
+        )
+
+        cp.current_F_spring += f_spring
+        cp.current_F_damp += f_damp
+        cp.current_F_total += f_total
+        cp.current_F_friction += f_friction
+
     def get_quaternion_derivative_local(self, w_loc, q):
         """ 
         Shabana's Local Formulation: dq/dt = 1/2 * G_bar^T * w_local 
@@ -677,6 +918,9 @@ class MBSolver:
         # --- Instantly break the integration loop if the user clicked Abort! ---
         if getattr(self, 'cancel_flag', False):
             raise InterruptedError("Simulation manually aborted by the user.")
+
+        profile = self._get_solver_profile()
+        profile['rhs_calls'] += 1
         
         self.unpack_state(Y)
         
@@ -692,7 +936,13 @@ class MBSolver:
             
         print_telemetry = (t - self.last_collision_print_time) >= 0.05
 
+        broadphase_start = perf_counter()
         active_contacts = self.check_broadphase_collisions(t)
+        profile['broadphase_time'] += perf_counter() - broadphase_start
+        active_contact_count = len(active_contacts)
+        profile['active_contact_pairs_total'] += active_contact_count
+        if active_contact_count > profile['active_contact_pairs_peak']:
+            profile['active_contact_pairs_peak'] = active_contact_count
         
         Q = self.build_force_vector(t)
 
@@ -701,90 +951,25 @@ class MBSolver:
         # ==========================================
         for cp in active_contacts:
             # We pass the two bodies defined in the pair to the Narrow Phase
-            contact_manifold = self.evaluate_narrow_phase(cp.body_i, cp.body_j, getattr(cp, 'mesh_mode', 0))
+            narrowphase_start = perf_counter()
+            manifold_i_j, manifold_j_i = self.evaluate_narrow_phase(cp)
+            profile['narrowphase_time'] += perf_counter() - narrowphase_start
+            points_i_j, normals_i_j, depths_i_j = manifold_i_j
+            points_j_i, normals_j_i, depths_j_i = manifold_j_i
+            contact_point_count = len(depths_i_j) + len(depths_j_i)
+            profile['contact_points_total'] += contact_point_count
 
-            if len(contact_manifold) > 0 and print_telemetry:
-                max_depth = max(c['depth'] for c in contact_manifold) * 1000.0
-                print(f"[{t:.3f}s] NARROW PHASE: {len(contact_manifold)} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth:.2f} mm)")
+            if contact_point_count > 0 and print_telemetry:
+                max_depth = 0.0
+                if len(depths_i_j) > 0:
+                    max_depth = max(max_depth, float(np.max(depths_i_j)))
+                if len(depths_j_i) > 0:
+                    max_depth = max(max_depth, float(np.max(depths_j_i)))
+                print(f"[{t:.3f}s] NARROW PHASE: {contact_point_count} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth * 1000.0:.2f} mm)")
                 self.last_collision_print_time = t
-            
-            for contact in contact_manifold:
-                pen = contact['body_pen']
-                tar = contact['body_tar']
-                p_glob = contact['point']
-                n_glob = contact['normal'] 
-                depth = contact['depth']
-                
-                idx_pen = self.body_index_map.get(pen.name)
-                idx_tar = self.body_index_map.get(tar.name)
-                row_pen = idx_pen * 6 if idx_pen is not None else None
-                row_tar = idx_tar * 6 if idx_tar is not None else None
-                
-                # 1. Kinematics (Relative Velocity)
-                r_pen = p_glob - pen.cog
-                r_tar = p_glob - tar.cog
-                
-                w_pen_glob = pen.principal_axes @ pen.angular_velocity
-                w_tar_glob = tar.principal_axes @ tar.angular_velocity
-                
-                v_pen_point = pen.velocity + np.cross(w_pen_glob, r_pen)
-                v_tar_point = tar.velocity + np.cross(w_tar_glob, r_tar)
-                
-                v_rel = v_pen_point - v_tar_point
-                v_rel_normal = np.dot(v_rel, n_glob)
-                
-                # --- NEW: TANGENTIAL KINEMATICS ---
-                # Subtract the normal velocity from the total velocity to get pure sliding velocity
-                v_rel_tangent = v_rel - (v_rel_normal * n_glob)
-                v_slip = np.linalg.norm(v_rel_tangent)
-                
-                # 2. Normal Force Math: K * (depth^n) + C * v_n * depth
-                F_spring = cp.stiffness * (depth ** cp.exponent)
-                
-                # --- THE FIX: Apply damping continuously in BOTH directions to bleed energy! ---
-                # (Removing the 'if v_rel_normal < 0:' condition stabilizes explicit solvers)
-                F_damp = -cp.damping * v_rel_normal * depth
-                
-                F_mag_normal = F_spring + F_damp
-                
-                # Failsafe: Normal force can never pull bodies together
-                if F_mag_normal < 0: F_mag_normal = 0.0 
-                
-                # --- REGULARIZED FRICTION MATH ---
-                F_frict_glob = np.zeros(3)
-                F_mag_friction = 0.0
-                
-                # --- THE FIX: Only apply friction if enabled by the user! ---
-                if cp.friction_enabled and v_slip > 1e-6 and cp.mu > 0.0:
-                    # The smooth tanh curve prevents solver explosions near 0 velocity
-                    mu_eff = cp.mu * np.tanh(v_slip / cp.slip_tolerance)
-                    
-                    F_mag_friction = mu_eff * F_mag_normal
-                    
-                    # Direction is exactly opposite to sliding
-                    frict_dir = -v_rel_tangent / v_slip 
-                    F_frict_glob = frict_dir * F_mag_friction
-                
-                # 3. Combine Normal and Friction Vectors
-                F_pen_glob = (n_glob * F_mag_normal) + F_frict_glob
-                F_tar_glob = -F_pen_glob
-                
-                # Track scalar forces for the CSV
-                cp.current_F_spring += F_spring
-                cp.current_F_damp += F_damp
-                cp.current_F_total += F_mag_normal
-                cp.current_F_friction += F_mag_friction # NEW
-                
-                # 4. Inject Forces & Torques (Unchanged!)
-                if row_pen is not None:
-                    Q[row_pen : row_pen+3] += F_pen_glob
-                    T_pen = np.cross(r_pen, F_pen_glob)
-                    Q[row_pen+3 : row_pen+6] += pen.principal_axes.T @ T_pen
-                    
-                if row_tar is not None:
-                    Q[row_tar : row_tar+3] += F_tar_glob
-                    T_tar = np.cross(r_tar, F_tar_glob)
-                    Q[row_tar+3 : row_tar+6] += tar.principal_axes.T @ T_tar
+
+            self._apply_contact_manifold(cp, cp.body_i, cp.body_j, points_i_j, normals_i_j, depths_i_j, Q)
+            self._apply_contact_manifold(cp, cp.body_j, cp.body_i, points_j_i, normals_j_i, depths_j_i, Q)
         # ==========================================
 
         # ==========================================
@@ -963,13 +1148,17 @@ class MBSolver:
         return dY
     
 
-    def run_simulation(self, t_end, dt, integrator=None, progress_callback=None):
+    def run_simulation(self, t_end, dt, integrator=None, progress_callback=None, post_process=False):
         """ 
         Runs the mathematical simulation using the Strategy Pattern. 
         integrator: Defaults to CustomRK4 if None is provided.
         """
         if integrator is None:
             integrator = CustomRK4()
+
+        self._reset_solver_profile()
+        total_solve_start = perf_counter()
+        post_processing_time = 0.0
             
         num_steps = int(t_end / dt)
         total_frames = num_steps + 1    
@@ -985,68 +1174,32 @@ class MBSolver:
         print(msg)
         logging.info(msg)
 
-        # --- Pack Static Joint Data for Numba! ---
-        self.prepare_static_numba_data()
-        self.initialize_springs() # Capture t=0 geometry for springs definition
-        self.initialize_motions()
+        # --- Build the derived arrays/caches that evaluate_derivatives expects ---
+        self.prepare_runtime_evaluation_state()
         
         # ==========================================
         # PHASE 1: THE INTEGRATION (CRUNCHING THE ODE)
         # ==========================================
         # This single line handles the entire timeline!
         # SciPy will adaptively shrink dt internally to resolve collisions/stiffness.
-        Y_history = integrator.solve(self.evaluate_derivatives, t_span, initial_Y, t_eval, progress_callback)
-        
-        # ==========================================
-        # PHASE 2: POST-PROCESSING (EXTRACTING FORCES)
-        # ==========================================
-        # --- Dynamically read how many frames actually survived! The result csv-file is recorded even if simulation crashed ---
-        actual_frames = len(Y_history)
-        
-        self.simulation_history = np.zeros((actual_frames, self.N_total))
-        self.lambda_history = np.zeros((actual_frames, self.num_equations))
-        self.gear_lambda_history = np.zeros((actual_frames, self.num_gear_eq)) if hasattr(self, 'num_gear_eq') else np.zeros((actual_frames, 0))
-        # --- Create a history matrix for explicit Contact Pairs ---
-        self.contact_history = np.zeros((actual_frames, len(self.contact_pairs), 4))
-        self.motion_lambda_history = np.zeros((actual_frames, getattr(self, 'num_motion_eq', 0)))
-        
-        print(f"Integration finished. Extracting Reaction Forces for {actual_frames} recorded frames...")
-        
-        for i in range(actual_frames):
-            t = t_eval[i]
-            Y_frame = Y_history[i]
-            
-            try:
-                # Evaluate once to populate self.current_lambdas
-                self.evaluate_derivatives(t, Y_frame)
-            except Exception as e:
-                # If the math explodes on the exact frame it died, stop processing cleanly
-                print(f"Post-processing stopped early at frame {i} due to math error.")
-                self.simulation_history = self.simulation_history[:i]
-                self.lambda_history = self.lambda_history[:i]
-                self.gear_lambda_history = self.gear_lambda_history[:i]
-                self.contact_history = self.contact_history[:i] # Ensure this array gets truncated too!
-                break
-                
-            # Save the frame
-            self.simulation_history[i, :] = Y_frame
-            self.lambda_history[i, :] = self.current_lambdas
-            
-            if hasattr(self, 'current_gear_lambdas'):
-                self.gear_lambda_history[i, :] = self.current_gear_lambdas
-            if hasattr(self, 'current_motion_lambdas'):
-                self.motion_lambda_history[i, :] = self.current_motion_lambdas
-                
-            # --- Save the contact forces to memory ---
-            for idx, cp in enumerate(self.contact_pairs):
-                self.contact_history[i, idx, 0] = getattr(cp, 'current_F_spring', 0.0)
-                self.contact_history[i, idx, 1] = getattr(cp, 'current_F_damp', 0.0)
-                self.contact_history[i, idx, 2] = getattr(cp, 'current_F_total', 0.0)
-                self.contact_history[i, idx, 3] = getattr(cp, 'current_F_friction', 0.0)
-                
-        logging.info("Simulation Math & Post-Processing Complete.")
-        print("Simulation complete!") # "Simulation complete (or aborted gracefully)."
-        return self.simulation_history
+        try:
+            Y_history = integrator.solve(self.evaluate_derivatives, t_span, initial_Y, t_eval, progress_callback)
+            actual_frames = len(Y_history)
+            self.simulation_history = np.array(Y_history, copy=True)
+            self.time_history = np.array(t_eval[:actual_frames], copy=True)
+            self._clear_postprocess_histories()
+
+            if post_process:
+                post_processing_time = self._extract_result_diagnostics(self.time_history)
+                logging.info("Simulation Math & Post-Processing Complete.")
+            else:
+                logging.info("Simulation Math Complete. Post-processing deferred until telemetry/export is requested.")
+
+            print("Simulation complete!") # "Simulation complete (or aborted gracefully)."
+            return self.simulation_history
+        finally:
+            total_solve_time = perf_counter() - total_solve_start
+            self._log_solver_profile(total_solve_time, post_processing_time)
     
     # ==========================================
     # --- PHASE 4: POST-PROCESSING ---
@@ -1055,6 +1208,7 @@ class MBSolver:
     def export_csv(self, filepath, dt):
         """ Exports the entire simulation history to a human-readable CSV. """
         logging.info(f"Starting CSV Export to {filepath}...")
+        self.ensure_postprocessed(dt)
         
         # 1. Build the Header Row dynamically
         headers = ["Time (s)"]
@@ -1598,42 +1752,18 @@ class MBSolver:
                 
         return active_contacts    
     
-    def evaluate_narrow_phase(self, body_a, body_b, mesh_mode=0):
+    def evaluate_narrow_phase(self, cp):
         """ Narrow Phase: Vertex-to-Mesh Proximity Check with dynamic simplification modes. """
-        import trimesh
-
-        def get_collision_mesh(body, mode):
-            # Dynamic cache naming so we don't accidentally mix mesh types!
-            mesh_attr = f'collision_mesh_mode_{mode}'
-            
-            if not hasattr(body, mesh_attr):
-                # MODE 3: Convex Hull (Fastest, Shrink-wrapped)
-                if mode == 3: 
-                    # Body.raw_geom is already a Trimesh object, so we can extract the hull instantly!
-                    hull = body.raw_geom.convex_hull
-                    setattr(body, mesh_attr, hull)
-                    return hull
-                
-                # --- PyVista Modifications ---
-                if mode == 1:   # MODE 1: Fine (High-Res)
-                    clean_mesh = body.mesh.clean().subdivide(1, subfilter='linear')
-                elif mode == 2: # MODE 2: Decimate (Reduce triangles by 50%)
-                    clean_mesh = body.mesh.clean().decimate(0.5)
-                else:           # MODE 0: Standard
-                    clean_mesh = body.mesh.clean()
-                
-                # Convert back to Trimesh for proximity searching
-                verts = clean_mesh.points
-                try:
-                    faces = clean_mesh.faces.reshape((-1, 4))[:, 1:4]
-                except ValueError:
-                    faces = clean_mesh.faces.reshape((-1, 3))
-                    
-                setattr(body, mesh_attr, trimesh.Trimesh(vertices=verts, faces=faces))
-                
-            return getattr(body, mesh_attr)
-
-        contacts = []
+        body_a, body_b = cp.body_i, cp.body_j
+        mesh_mode = getattr(cp, 'mesh_mode', 0)
+        symmetric_contact_search = getattr(cp, 'symmetric_contact_search', True)
+        reduction_enabled = getattr(cp, 'contact_candidate_reduction_enabled', True)
+        empty_manifold = (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0, 3), dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+        )
+        profile = self._get_solver_profile()
 
         min_a, max_a = body_a.get_global_aabb()
         min_b, max_b = body_b.get_global_aabb()
@@ -1642,52 +1772,54 @@ class MBSolver:
 
         def get_penetrations(penetrator, target):
             # Extract the user's chosen mesh complexity
-            pen_mesh = get_collision_mesh(penetrator, mesh_mode)
-            tar_mesh = get_collision_mesh(target, mesh_mode)
+            _, local_verts_m = self._get_collision_cache(penetrator, mesh_mode)
+            tar_mesh, _ = self._get_collision_cache(target, mesh_mode)
 
-            local_verts_m = pen_mesh.vertices * 0.001 
             global_verts_m = (penetrator.principal_axes @ local_verts_m.T).T + penetrator.cog
             
             in_box = np.all((global_verts_m >= overlap_min) & (global_verts_m <= overlap_max), axis=1)
             candidate_verts_m = global_verts_m[in_box]
             
             if len(candidate_verts_m) == 0: 
-                return []
+                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
+
+            profile['candidate_vertices_total'] += len(candidate_verts_m)
 
             target_local_candidates_m = (target.principal_axes.T @ (candidate_verts_m - target.cog).T).T
+            candidate_verts_m, target_local_candidates_m = self._reduce_contact_candidates(candidate_verts_m, target_local_candidates_m, reduction_enabled)
+            profile['candidate_vertices_reduced_total'] += len(candidate_verts_m)
             target_local_candidates_mm = target_local_candidates_m * 1000.0
             
             try:
                 closest_pts_mm, distances_mm, tri_ids = tar_mesh.nearest.on_surface(target_local_candidates_mm)
             except Exception as e:
                 print(f"  -> ERROR: Trimesh proximity crashed! {e}")
-                return []
+                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
 
             local_normals = tar_mesh.face_normals[tri_ids]
             vec_to_vertices = target_local_candidates_mm - closest_pts_mm
             dot_products = np.einsum('ij,ij->i', vec_to_vertices, local_normals)
             depths_m = distances_mm * 0.001
-            valid_mask = (dot_products < -1e-5) & (depths_m >= 1e-6)
+            # Light bodies on stiff contacts can balance their weight with sub-micron penetrations,
+            # especially when the load is distributed across many contact points.
+            valid_mask = (dot_products < -1e-5) & (depths_m >= 1e-7)
 
             if not np.any(valid_mask):
-                return []
+                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
 
             valid_points = candidate_verts_m[valid_mask]
             valid_normals = (target.principal_axes @ local_normals[valid_mask].T).T
             valid_depths = depths_m[valid_mask]
 
-            return [
-                {
-                    'body_pen': penetrator,
-                    'body_tar': target,
-                    'point': point,
-                    'normal': normal,
-                    'depth': depth,
-                }
-                for point, normal, depth in zip(valid_points, valid_normals, valid_depths)
-            ]
+            return valid_points, valid_normals, valid_depths
 
-        contacts.extend(get_penetrations(body_a, body_b))
-        contacts.extend(get_penetrations(body_b, body_a))
-        
-        return contacts
+        if symmetric_contact_search:
+            return get_penetrations(body_a, body_b), get_penetrations(body_b, body_a)
+
+        _, verts_a_m = self._get_collision_cache(body_a, mesh_mode)
+        _, verts_b_m = self._get_collision_cache(body_b, mesh_mode)
+
+        if verts_a_m.shape[0] <= verts_b_m.shape[0]:
+            return get_penetrations(body_a, body_b), empty_manifold
+
+        return empty_manifold, get_penetrations(body_b, body_a)

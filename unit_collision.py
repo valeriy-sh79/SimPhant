@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.0
 #  Module: unit_collision.py
 #  Description:
 #      Defines the ContactPair class for handling collision interactions between rigid bodies, 
@@ -32,7 +32,8 @@ class ContactPair:
     Uses the Hunt-Crossley / Hertzian non-linear penalty model.
     """
     def __init__(self, name, body_i, body_j, stiffness_ui, exponent, damping_ui, 
-                 friction_enabled=False, mu=0.3, slip_tol_ui=10.0, mesh_mode=0):
+                 friction_enabled=False, mu=0.3, slip_tol_ui=10.0, mesh_mode=0,
+                 symmetric_contact_search=True, contact_candidate_reduction_enabled=True):
         self.name = name
         self.body_i = body_i
         self.body_j = body_j
@@ -59,6 +60,10 @@ class ContactPair:
         
         # --- Store the Mesh Simplification Mode ---
         self.mesh_mode = mesh_mode # <--- Changed here (0=Standard, 1=Fine, 2=Decimate, 3=ConvexHull)
+        
+        # --- Narrow-Phase Performance Tuning (per contact pair) ---
+        self.symmetric_contact_search = symmetric_contact_search
+        self.contact_candidate_reduction_enabled = contact_candidate_reduction_enabled
         
         # Trackers for the CSV
         self.current_F_spring = 0.0

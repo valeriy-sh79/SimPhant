@@ -42,6 +42,7 @@ If you want to inspect the implementation, modify the solver, or contribute code
 - Collision and contact handling with friction options
 - Spur/helical, internal, and bevel gear constraints
 - Kinematic motion functions for supported joints
+- Import spline path from data file to drive the forces/torque and motion
 - Multiple numerical solver and integration methods
 - Simulation playback, telemetry, CSV export, and video export
 - Project save/load support using `.mbd` files
