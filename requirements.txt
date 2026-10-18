@@ -12,6 +12,7 @@ numba>=0.58.0
 # CAD & Mesh Geometry Processing
 trimesh>=4.0.0
 manifold3d>=3.0.0
+pycollada>=0.8  # Required by trimesh to load COLLADA (.dae) meshes, common in ROS/URDF packages
 
 # Packaging (Optional for building .exe)
 pyinstaller>=6.0.0

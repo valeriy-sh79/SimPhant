@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: unit_project.py
 #  Description:
 #      Handles saving and loading the complete MBD simulation state, including exporting meshes and project data.
@@ -75,6 +75,8 @@ class ProjectManager:
             data["bodies"].append({
                 "name": body.name,
                 "density": body.density,
+                # Saved so reopening the project does not need a mesh volume integral (absent in older files).
+                "volume": body.volume,
                 # --- Save the exact mathematical mass and inertia! ---
                 "mass": body.mass,
                 "principal_inertia": body.principal_inertia.tolist(),
@@ -165,6 +167,8 @@ class ProjectManager:
             }
             if s_data["type"] == "torsion":
                 s_data["axis_choice"] = getattr(spring, 'axis_choice', 'Z')
+            s_data["is_nonlinear"] = getattr(spring, 'is_nonlinear', False)
+            s_data["nonlinear_expr"] = getattr(spring, 'nonlinear_expr', '0')
             data["springs"].append(s_data)
 
         # --- 6. Save Bushings ---
@@ -204,6 +208,7 @@ class ProjectManager:
                 "mesh_mode": getattr(cp, 'mesh_mode', 0), # <--- THE NEW VARIABLE
                 "symmetric_contact_search": getattr(cp, 'symmetric_contact_search', True),
                 "contact_candidate_reduction_enabled": getattr(cp, 'contact_candidate_reduction_enabled', True),
+                "d_max_m": getattr(cp, 'd_max_m', 0.0001),
                 "enabled": cp.enabled
             })
 
@@ -355,10 +360,20 @@ class ProjectManager:
             actor = app.plotter.add_mesh(loaded_mesh, color=b_data["base_color"], smooth_shading=True)
             tree_item = QTreeWidgetItem(app.node_bodies, [b_data["name"]])
             
+            # Every mass property is restored from the file, so the mesh integral is skipped.
+            # Files saved before "volume" existed derive it as V = m / density (exact for a
+            # homogeneous body). Only files lacking the mass data itself (or with a non-positive
+            # density) fall back to the original behavior: the constructor recomputes from the mesh.
+            mass_keys = ("mass", "inertia_tensor", "principal_inertia", "cog", "principal_axes")
+            has_saved_mass_props = all(k in b_data for k in mass_keys) and b_data.get("density", 0.0) > 1e-12
+
             # --- THE FIX: Pass restored_trimesh instead of None! ---
-            new_body = RigidBody(b_data["name"], restored_trimesh, loaded_mesh, actor, tree_item)
+            new_body = RigidBody(b_data["name"], restored_trimesh, loaded_mesh, actor, tree_item,
+                                 skip_mass_calculation=has_saved_mass_props)
             
             new_body.density = b_data["density"]
+            if has_saved_mass_props:
+                new_body.volume = float(b_data["volume"]) if "volume" in b_data else float(b_data["mass"]) / new_body.density
             new_body.cog = np.array(b_data["cog"])
             new_body.principal_axes = np.array(b_data["principal_axes"])
             new_body.pos_angles = np.array(b_data["pos_angles"])
@@ -514,9 +529,13 @@ class ProjectManager:
             if s_data["type"] == "compression":
                 spring = CompressionSpring(s_data["name"], b_i, s_data["rf_i_name"], b_j, s_data["rf_j_name"], app.plotter)
                 # DELETE THIS LINE: spring.bind_kinematics(app.rframes)
+                spring.is_nonlinear = s_data.get("is_nonlinear", False)
+                spring.compile_nonlinear_force(s_data.get("nonlinear_expr", "0"))
             else:
                 spring = TorsionSpring(s_data["name"], b_i, s_data["rf_i_name"], b_j, s_data["rf_j_name"], s_data.get("axis_choice", 'Z'), app.plotter)
                 # DELETE THIS LINE: spring.bind_kinematics(app.rframes, spring.axis_choice)
+                spring.is_nonlinear = s_data.get("is_nonlinear", False)
+                spring.compile_nonlinear_torque(s_data.get("nonlinear_expr", "0"))
                 
             spring.stiffness, spring.damping, spring.preload = s_data["stiffness"], s_data["damping"], s_data["preload"]
             spring.enabled = s_data.get("enabled", True)
@@ -574,6 +593,8 @@ class ProjectManager:
             # Older save files predate this upgrade, so default both to enabled.
             cp.symmetric_contact_search = c_data.get("symmetric_contact_search", True)
             cp.contact_candidate_reduction_enabled = c_data.get("contact_candidate_reduction_enabled", True)
+            # Older save files predate the d_max damping saturation; 0.1mm matches the new UI default.
+            cp.d_max_m = c_data.get("d_max_m", 0.0001)
             cp.enabled = c_data.get("enabled", True)
             
             app.contact_pairs.append(cp)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: unit_forces.py
 #  Description:
 #      Defines the Force class and related enumerations for handling various types of forces and torques
@@ -286,10 +286,6 @@ class Force:
             act.SetVisibility(True)
         
         dir_v = g_vec / mag
-        
-        # Visual failsafe: Force direction based on mathematical sign!
-        if self._eval_func(t) < 0.0:
-            dir_v = -dir_v
             
         v1 = np.array([1.0, 0.0, 0.0])
         

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: math_kernels.py
 #  Description:
 #      Provides optimized mathematical kernels for multibody dynamics simulations, including
@@ -186,7 +186,7 @@ def assemble_jacobian_numba(num_equations, num_states_vel, j_types, b_idx_i, b_i
     return Phi_q, gamma_star
 
 @njit(fastmath=True)
-def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx_2, g_b_idx_c, g_n1_loc, g_n2_loc, rot):
+def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx_2, g_b_idx_c, g_n1_loc, g_n2_loc, rot, ang, alpha, baumgarte_enabled):
     """ 
     Assembles the 1-row Coupler Constraint Jacobian for perfectly rigid Epicyclic/Bevel gears!
     Math: w_1 * r_1 + w_2 * r_2 - w_carrier * (r_1 + r_2) = 0
@@ -216,8 +216,19 @@ def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx
             # Carrier balances the torque (Action = Reaction)
             Phi_q[k, col_c+3 : col_c+6] = -rot[idx_c].T @ (n1_glob + n2_glob)
             
-        # Standard velocity-level rigid coupling (Baumgarte gamma stabilizes inherently)
+        # Standard velocity-level rigid coupling (no drift correction) by default.
         gamma_star[k] = 0.0
+        
+        if baumgarte_enabled:
+            # Feed back the current velocity-level constraint violation so any drift
+            # introduced by neighboring stiff events (e.g. impacts) decays exponentially
+            # instead of persisting/compounding indefinitely.
+            w1_glob = (rot[idx_1] @ ang[idx_1]) if idx_1 >= 0 else np.zeros(3)
+            w2_glob = (rot[idx_2] @ ang[idx_2]) if idx_2 >= 0 else np.zeros(3)
+            wc_glob = (rot[idx_c] @ ang[idx_c]) if idx_c >= 0 else np.zeros(3)
+            
+            phi_dot = np.dot(n1_glob, w1_glob) + np.dot(n2_glob, w2_glob) - np.dot(n1_glob + n2_glob, wc_glob)
+            gamma_star[k] = -2.0 * alpha * phi_dot
         
     return Phi_q, gamma_star
 
@@ -245,7 +256,7 @@ def apply_contact_manifold_numba(row_pen, row_tar,
                                  w_pen_glob, w_tar_glob,
                                  pen_rot_t, tar_rot_t,
                                  points_glob, normals_glob, depths,
-                                 stiffness, exponent, damping,
+                                 stiffness, exponent, damping, d_max,
                                  friction_enabled, mu, slip_tolerance,
                                  Q):
     """Applies one contact manifold into Q and returns accumulated scalar contact forces."""
@@ -271,7 +282,16 @@ def apply_contact_manifold_numba(row_pen, row_tar,
         v_slip = np.linalg.norm(v_rel_tangent)
 
         f_spring = stiffness * (depth ** exponent)
-        f_damp = -damping * v_rel_normal * depth
+        # ADAMS IMPACT-style damping: ramp the coefficient 0 -> damping over [0, d_max],
+        # then hold it constant, instead of scaling it by the full (unbounded) depth.
+        if d_max > 0.0:
+            ramp = depth / d_max
+            if ramp > 1.0:
+                ramp = 1.0
+        else:
+            ramp = 1.0
+        c_eff = damping * ramp
+        f_damp = -c_eff * v_rel_normal
         f_mag_normal = f_spring + f_damp
         if f_mag_normal < 0.0:
             f_mag_normal = 0.0
@@ -388,6 +408,9 @@ def warm_up_numba_kernels():
         g_n1_loc,
         g_n2_loc,
         rot,
+        ang,
+        20.0,
+        True,
     )
 
     M = np.eye(2, dtype=np.float64)
@@ -414,6 +437,7 @@ def warm_up_numba_kernels():
         1e5,
         1.5,
         10.0,
+        0.0001,
         True,
         0.3,
         0.01,

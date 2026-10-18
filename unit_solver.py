@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
@@ -68,6 +68,10 @@ class MBSolver:
         self.epsilon = epsilon
         self.alpha = alpha
         self.beta = beta
+        # Code-level dev flag (not yet exposed in UI): feeds the gear constraint's own
+        # velocity-level drift back as a Baumgarte correction, so a transient disturbance
+        # (e.g. a stiff contact impact on a gear-coupled body) decays instead of persisting.
+        self.gear_baumgarte_enabled = False # Deactivated by default since increases twice the simulation time
         # Symmetric search and candidate reduction are per-ContactPair properties now;
         # these are just the shared tuning constants for the reduction voxel grid.
         self.contact_candidate_reduction_threshold = 96
@@ -747,8 +751,13 @@ class MBSolver:
                 L_dot = np.dot(v_j_glob - v_i_glob, u_ij)
                 delta_L = L - spring.initial_length
 
-                # F_mag = K*x + C*v - Preload
-                F_mag = (spring.stiffness * delta_L) + (spring.damping * L_dot) - spring.preload
+                if getattr(spring, 'is_nonlinear', False):
+                    # Documented convention: F_spring = F_preload - F(x, v) (expansion-positive).
+                    # F_mag here is the contraction-direction magnitude, i.e. F_mag = -F_spring.
+                    F_mag = -spring.evaluate_nonlinear_force(delta_L, L_dot) - spring.preload
+                else:
+                    # F_mag = K*x + C*v - Preload
+                    F_mag = (spring.stiffness * delta_L) + (spring.damping * L_dot) - spring.preload
 
                 F_i_glob = F_mag * u_ij  # Force on I pulls towards J if stretched
                 F_j_glob = -F_i_glob
@@ -784,7 +793,11 @@ class MBSolver:
                 elif delta_theta < -np.pi: delta_theta += 2 * np.pi
 
                 # Tau_mag = K*theta + C*w - Preload
-                tau_mag = (spring.stiffness * delta_theta) + (spring.damping * theta_dot) - spring.preload
+                if getattr(spring, 'is_nonlinear', False):
+                    # T_spring = T_preload - T(theta, omega); tau_mag is the opposite sign
+                    tau_mag = -spring.evaluate_nonlinear_torque(delta_theta, theta_dot) - spring.preload
+                else:
+                    tau_mag = (spring.stiffness * delta_theta) + (spring.damping * theta_dot) - spring.preload
 
                 T_i_glob = tau_mag * axis_glob
                 T_j_glob = -T_i_glob
@@ -885,6 +898,7 @@ class MBSolver:
             cp.stiffness,
             cp.exponent,
             cp.damping,
+            getattr(cp, 'd_max_m', 0.0001),
             cp.friction_enabled,
             cp.mu,
             cp.slip_tolerance,
@@ -959,6 +973,9 @@ class MBSolver:
             contact_point_count = len(depths_i_j) + len(depths_j_i)
             profile['contact_points_total'] += contact_point_count
 
+            self._apply_contact_manifold(cp, cp.body_i, cp.body_j, points_i_j, normals_i_j, depths_i_j, Q)
+            self._apply_contact_manifold(cp, cp.body_j, cp.body_i, points_j_i, normals_j_i, depths_j_i, Q)
+
             if contact_point_count > 0 and print_telemetry:
                 max_depth = 0.0
                 if len(depths_i_j) > 0:
@@ -967,9 +984,6 @@ class MBSolver:
                     max_depth = max(max_depth, float(np.max(depths_j_i)))
                 print(f"[{t:.3f}s] NARROW PHASE: {contact_point_count} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth * 1000.0:.2f} mm)")
                 self.last_collision_print_time = t
-
-            self._apply_contact_manifold(cp, cp.body_i, cp.body_j, points_i_j, normals_i_j, depths_i_j, Q)
-            self._apply_contact_manifold(cp, cp.body_j, cp.body_i, points_j_i, normals_j_i, depths_j_i, Q)
         # ==========================================
 
         # ==========================================
@@ -1001,7 +1015,8 @@ class MBSolver:
             if self.num_gear_eq > 0:
                 Phi_q_gears, gamma_star_gears = assemble_gear_jacobian_numba(
                     self.num_gear_eq, self.N_vel, self.g_b_idx_1, self.g_b_idx_2, self.g_b_idx_c,
-                    self.g_n1_loc, self.g_n2_loc, rot
+                    self.g_n1_loc, self.g_n2_loc, rot, ang, self.alpha,
+                    getattr(self, 'gear_baumgarte_enabled', True)
                 )
                 if self.num_equations > 0:
                     Phi_q = np.vstack((Phi_q, Phi_q_gears))
@@ -1135,6 +1150,13 @@ class MBSolver:
             self.current_gear_lambdas = np.zeros(0)
             accelerations = scipy.linalg.lu_solve(self.lu_M, Q)
             
+        if not np.all(np.isfinite(accelerations)):
+            self._log_divergence_diagnostics(t, Q, accelerations)
+            raise FloatingPointError(
+                f"Numerical divergence (NaN/Inf acceleration) detected at t={t:.6f}s. "
+                f"See debug_log.txt for a full per-body/contact/gear diagnostic dump."
+            )
+            
         dY = np.zeros(self.N_total)
         pos_idx, vel_idx, accel_idx = 0, self.N_pos, 0
         
@@ -1147,6 +1169,37 @@ class MBSolver:
             
         return dY
     
+    def _log_divergence_diagnostics(self, t, Q, accelerations):
+        """Dumps per-body/contact/gear state to debug_log.txt to trace the origin of a NaN/Inf blow-up."""
+        header = f"=== DIVERGENCE DETECTED at t={t:.6f}s ==="
+        logging.error(header)
+        print(header)
+        
+        for i, body in enumerate(self.moving_bodies):
+            row = i * 6
+            a_lin, a_ang = accelerations[row:row+3], accelerations[row+3:row+6]
+            flag = " <-- NON-FINITE" if not (np.all(np.isfinite(a_lin)) and np.all(np.isfinite(a_ang))) else ""
+            msg = (f"  Body '{body.name}': v={body.velocity} |v|={np.linalg.norm(body.velocity):.3e} m/s | "
+                   f"w={body.angular_velocity} |w|={np.linalg.norm(body.angular_velocity):.3e} rad/s | "
+                   f"a_lin={a_lin} a_ang={a_ang} | Q_force={Q[row:row+3]} Q_torque={Q[row+3:row+6]}{flag}")
+            logging.error(msg)
+            print(msg)
+            
+        for cp in self.contact_pairs:
+            if not cp.enabled or not cp.body_i.enabled or not cp.body_j.enabled:
+                continue
+            msg = (f"  Contact '{cp.name}' ({cp.body_i.name}-{cp.body_j.name}): "
+                   f"F_spring={cp.current_F_spring:.3e} N | F_damp={cp.current_F_damp:.3e} N | "
+                   f"F_total={cp.current_F_total:.3e} N | F_fric={cp.current_F_friction:.3e} N")
+            logging.error(msg)
+            print(msg)
+            
+        if hasattr(self, 'current_gear_lambdas') and len(self.current_gear_lambdas) > 0:
+            active_gears = [g for g in self.gear_pairs if g.enabled and g.body_1.enabled and g.body_2.enabled]
+            for k, gear in enumerate(active_gears):
+                msg = f"  Gear '{gear.name}': reaction_force(F_t)={self.current_gear_lambdas[k]:.3e} N"
+                logging.error(msg)
+                print(msg)
 
     def run_simulation(self, t_end, dt, integrator=None, progress_callback=None, post_process=False):
         """ 
@@ -1257,15 +1310,26 @@ class MBSolver:
                 
             name = spring.name
             if hasattr(spring, 'initial_length'): # Compression Spring
-                headers.extend([
-                    f"{name}_Def_dx (m)", f"{name}_Vel_v (m/s)", 
-                    f"{name}_F_def_kx (N)", f"{name}_F_damp_cv (N)", f"{name}_F_result (N)"
-                ])
+                if getattr(spring, 'is_nonlinear', False):
+                    # Elastic/Damping split is meaningless for a user-defined F(x, v) characteristic
+                    headers.extend([
+                        f"{name}_Def_dx (m)", f"{name}_Vel_v (m/s)", f"{name}_F_result (N)"
+                    ])
+                else:
+                    headers.extend([
+                        f"{name}_Def_dx (m)", f"{name}_Vel_v (m/s)", 
+                        f"{name}_F_def_kx (N)", f"{name}_F_damp_cv (N)", f"{name}_F_result (N)"
+                    ])
             elif hasattr(spring, 'initial_angle'): # Torsion Spring
-                headers.extend([
-                    f"{name}_Def_dTh (rad)", f"{name}_Vel_w (rad/s)", 
-                    f"{name}_T_def_kTh (Nm)", f"{name}_T_damp_cw (Nm)", f"{name}_T_result (Nm)"
-                ])
+                if getattr(spring, 'is_nonlinear', False):
+                    headers.extend([
+                        f"{name}_Def_dTh (rad)", f"{name}_Vel_w (rad/s)", f"{name}_T_result (Nm)"
+                    ])
+                else:
+                    headers.extend([
+                        f"{name}_Def_dTh (rad)", f"{name}_Vel_w (rad/s)", 
+                        f"{name}_T_def_kTh (Nm)", f"{name}_T_damp_cw (Nm)", f"{name}_T_result (Nm)"
+                    ])
             elif hasattr(spring, 'k_trans'): # Bushing
                 headers.extend([
                     f"{name}_dx (m)", f"{name}_dy (m)", f"{name}_dz (m)",
@@ -1429,10 +1493,11 @@ class MBSolver:
                         p_j = spring.body_j.cog + r_j_glob
                         
                         if hasattr(spring, 'initial_length'): 
+                            is_nonlinear = getattr(spring, 'is_nonlinear', False)
                             vec_ij = p_j - p_i
                             L = np.linalg.norm(vec_ij)
                             if L < 1e-8:
-                                row_data.extend([fmt(0.0)] * 5)
+                                row_data.extend([fmt(0.0)] * (3 if is_nonlinear else 5))
                                 continue
                                 
                             u_ij = vec_ij / L
@@ -1442,15 +1507,19 @@ class MBSolver:
                             L_dot = np.dot(v_j_glob - v_i_glob, u_ij)
                             delta_L = L - spring.initial_length
                             
-                            F_def = spring.stiffness * delta_L
-                            F_damp = spring.damping * L_dot
-                            F_res = F_def + F_damp - spring.preload
-                            
-                            # Log Kinematics + Forces (Global vectors removed!)
-                            row_data.extend([
-                                fmt(delta_L), fmt(L_dot),
-                                fmt(F_def), fmt(F_damp), fmt(F_res)
-                            ])
+                            if is_nonlinear:
+                                F_res = -spring.evaluate_nonlinear_force(delta_L, L_dot) - spring.preload
+                                # Elastic/Damping split is meaningless for a user-defined F(x, v) characteristic
+                                row_data.extend([fmt(delta_L), fmt(L_dot), fmt(F_res)])
+                            else:
+                                F_def = spring.stiffness * delta_L
+                                F_damp = spring.damping * L_dot
+                                F_res = F_def + F_damp - spring.preload
+                                # Log Kinematics + Forces (Global vectors removed!)
+                                row_data.extend([
+                                    fmt(delta_L), fmt(L_dot),
+                                    fmt(F_def), fmt(F_damp), fmt(F_res)
+                                ])
                             
                         elif hasattr(spring, 'initial_angle'): 
                             axis_glob = A_i @ spring.local_axis_i
@@ -1471,15 +1540,20 @@ class MBSolver:
                             if delta_theta > np.pi: delta_theta -= 2 * np.pi
                             elif delta_theta < -np.pi: delta_theta += 2 * np.pi
                             
-                            T_def = spring.stiffness * delta_theta
-                            T_damp = spring.damping * theta_dot
-                            T_res = T_def + T_damp - spring.preload
-                            
-                            # Log Kinematics + Torques (Global vectors removed!)
-                            row_data.extend([
-                                fmt(delta_theta), fmt(theta_dot),
-                                fmt(T_def), fmt(T_damp), fmt(T_res)
-                            ])
+                            if getattr(spring, 'is_nonlinear', False):
+                                T_res = -spring.evaluate_nonlinear_torque(delta_theta, theta_dot) - spring.preload
+                                # Elastic/Damping split is meaningless for a user-defined T(theta, omega)
+                                row_data.extend([fmt(delta_theta), fmt(theta_dot), fmt(T_res)])
+                            else:
+                                T_def = spring.stiffness * delta_theta
+                                T_damp = spring.damping * theta_dot
+                                T_res = T_def + T_damp - spring.preload
+                                
+                                # Log Kinematics + Torques (Global vectors removed!)
+                                row_data.extend([
+                                    fmt(delta_theta), fmt(theta_dot),
+                                    fmt(T_def), fmt(T_damp), fmt(T_res)
+                                ])
                             
                         # --- Bushing CSV Telemetry ---
                         # --- ADD THIS: Bushing CSV Telemetry (Orientation Upgraded) ---
