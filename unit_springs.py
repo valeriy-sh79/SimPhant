@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.1
 #  Module: unit_springs.py
 #  Description:
 #      Defines compliant physical connections, including 1D compression/torsion springs 
@@ -26,8 +26,56 @@
 #  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
+import re
+
 import numpy as np
 import pyvista as pv
+
+# ==========================================
+# SAFE MATH COMPILER ENVIRONMENT (shared with Force / JointMotion expressions)
+# ==========================================
+def _custom_step(x, x0, h0, x1, h1):
+    """ Smooth STEP function (Hermite interpolation). """
+    if x <= x0: return float(h0)
+    if x >= x1: return float(h1)
+    if x1 == x0: return float(h0)
+    u = (x - x0) / (x1 - x0)
+    return float(h0 + (h1 - h0) * (u**2) * (3.0 - 2.0 * u))
+
+def _custom_if(x, e1, e2):
+    """ Simplified IF function: (condition, value_if_negative, value_if_positive_or_zero) """
+    if x < 0.0: return float(e1)
+    else: return float(e2)
+
+_SPRING_SAFE_DICT = {
+    "np": np, "sin": np.sin, "cos": np.cos, "tan": np.tan,
+    "pi": np.pi, "exp": np.exp, "sqrt": np.sqrt, "abs": np.abs,
+    "step": _custom_step, "STEP": _custom_step,
+    "IF": _custom_if,
+    "__builtins__": None
+}
+
+def compile_two_arg_expression(expr_str, arg1, arg2):
+    """ Compiles 'expr_str' into f(arg1, arg2). Returns (callable, ok); on failure the callable returns 0.0. """
+    zero = lambda a, b: 0.0
+    expr_str = expr_str.strip()
+    if not expr_str:
+        return zero, True
+
+    try:
+        val = float(expr_str.replace(',', '.'))
+        return (lambda a, b: val), True
+    except ValueError:
+        pass
+
+    try:
+        clean_str = expr_str.replace(',', '.').replace(';', ',')
+        safe_expr = re.sub(r'\bif\s*\(', 'IF(', clean_str, flags=re.IGNORECASE)
+        func = eval(f"lambda {arg1}, {arg2}: {safe_expr}", _SPRING_SAFE_DICT)
+        func(0.0, 0.0)  # Test evaluate to catch syntax errors immediately
+        return func, True
+    except Exception:
+        return zero, False
 
 class BaseSpring:
     """ Parent class for all compliant elements in the simulation. """
@@ -136,6 +184,11 @@ class CompressionSpring(BaseSpring):
         self.preload = 0.0
         self.initial_length = 0.0 
         
+        # --- Non-Linear Force Characteristic F(x, v) ---
+        self.is_nonlinear = False
+        self.nonlinear_expr = "0"
+        self._nonlinear_func = lambda x, v: 0.0
+        
         # --- Visual Parameters (Multipliers of the global UI scale) ---
         self.visual_coils = 8        # Modifies the number of coils
         self.visual_radius = 0.2        # Modifies the overall coil width
@@ -161,6 +214,25 @@ class CompressionSpring(BaseSpring):
         actor = self.plotter.add_mesh(tube, color='blue', smooth_shading=True)
         actor.SetVisibility(False)
         self.actors.append(actor)
+
+    def compile_nonlinear_force(self, expr_str):
+        """ Compiles the user's F(x, v) text into a callable. x in mm, v in mm/s, returns N.
+        Follows F_spring = F_preload - F(x, v): to replicate a linear K/C spring use
+        F(x, v) = -K*x - C*v (same sign convention as the documented spring force law). """
+        self.nonlinear_expr = expr_str.strip()
+        func, ok = compile_two_arg_expression(self.nonlinear_expr, "x", "v")
+        if not ok:
+            print(f"Warning: Invalid non-linear spring expression '{self.nonlinear_expr}' for '{self.name}'")
+        self._nonlinear_func = func
+        return ok
+
+    def evaluate_nonlinear_force(self, delta_L, L_dot):
+        """ Evaluates F(x, v) with x/v converted from SI (m, m/s) to UI units (mm, mm/s).
+        Returns F(x, v) as defined by the user (expansion-positive, per F_spring = F_preload - F(x, v)). """
+        try:
+            return float(self._nonlinear_func(delta_L * 1000.0, L_dot * 1000.0))
+        except Exception:
+            return 0.0
 
     def update_transform(self, scale_factor=10.0):
         """ Dynamically rebuilds the coil to preserve perfectly circular wire, then rotates it. """
@@ -232,6 +304,11 @@ class TorsionSpring(BaseSpring):
         self.preload = 0.0
         self.initial_angle = 0.0
         
+        # --- Non-Linear Torque Characteristic T(theta, omega) ---
+        self.is_nonlinear = False
+        self.nonlinear_expr = "0"
+        self._nonlinear_func = lambda theta, omega: 0.0
+        
         # --- Visual Parameters (Multipliers of the global UI scale) ---
         self.visual_coils = 3
         self.visual_inner_radius = 0.2    # Size of the center hole
@@ -258,6 +335,23 @@ class TorsionSpring(BaseSpring):
         actor = self.plotter.add_mesh(tube, color='red', smooth_shading=True)
         actor.SetVisibility(False)
         self.actors.append(actor)
+
+    def compile_nonlinear_torque(self, expr_str):
+        """ Compiles the user's T(theta, omega) text. theta in rad, omega in rad/s, returns Nmm.
+        Follows T_spring = T_preload - T(theta, omega): a linear K/C spring is T = -K*theta - C*omega. """
+        self.nonlinear_expr = expr_str.strip()
+        func, ok = compile_two_arg_expression(self.nonlinear_expr, "theta", "omega")
+        if not ok:
+            print(f"Warning: Invalid non-linear spring expression '{self.nonlinear_expr}' for '{self.name}'")
+        self._nonlinear_func = func
+        return ok
+
+    def evaluate_nonlinear_torque(self, delta_theta, theta_dot):
+        """ Evaluates T(theta, omega) in SI (rad, rad/s) and returns Nm (the user expression is in Nmm). """
+        try:
+            return float(self._nonlinear_func(delta_theta, theta_dot)) / 1000.0
+        except Exception:
+            return 0.0
 
     def update_transform(self, scale_factor=10.0):
         """ Dynamically rebuilds the spiral to show winding/unwinding, then rotates it. """

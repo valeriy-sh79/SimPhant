@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
@@ -55,16 +55,17 @@ from unit_forces import Force, ForceType, ForceFrame
 from unit_joints import Joint, JointType
 from unit_solver import MBSolver
 from PySide6.QtCore import QTimer, QEvent, Qt, QObject, Signal, QUrl, QByteArray, QSize, QRectF
-from unit_springs import CompressionSpring, TorsionSpring, Bushing 
+from unit_springs import CompressionSpring, TorsionSpring, Bushing, compile_two_arg_expression
 from unit_project import ProjectManager
 from unit_motions import JointMotion, MotionTransRot, MotionType
 from unit_spline import SplineDataError, SplineEditorDialog, is_spline_expression, load_spline_expression
 from math_kernels import warm_up_numba_kernels
+import unit_urdf_import
 
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
 APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.10.0"
+APP_VERSION = "2026.10.1"
 APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
@@ -342,6 +343,10 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.actionImport_CAD.triggered.connect(self.import_cad_universal)
         self.ui.actionSetWorkingDir.triggered.connect(self.set_working_directory)
         
+        # 3. URDF (Unified Robot Description Format) robot model importer
+        if hasattr(self.ui, 'actionImport_URDF'):
+            self.ui.actionImport_URDF.triggered.connect(self.import_urdf_robot)
+        
         # --- Save, New, Open, and Exit Actions ---
         self.ui.actionNew_Project.triggered.connect(self.new_project)
         self.ui.actionOpen_Project.triggered.connect(self.open_project)
@@ -495,6 +500,8 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnComprSpring.clicked.connect(self.prepare_new_comp_spring)
         self.ui.btnRenameCompSpring.clicked.connect(self.rename_comp_spring)
         self.ui.chkEnabledCompSpring.toggled.connect(self.toggle_comp_spring_enabled)
+        self.ui.chkNonLinearComprSpring.toggled.connect(self.toggle_nonlinear_comp_spring)
+        self.ui.Edit_NonLinearComprSpring.textChanged.connect(self.validate_nonlinear_spring_expression)
 
         # --- UI Connections: Torsion Springs ---
         self.ui.btnAddTorsSpring.clicked.connect(self.add_tors_spring)
@@ -503,6 +510,8 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnTorsionSpring.clicked.connect(self.prepare_new_tors_spring)
         self.ui.btnRenameTorsSpring.clicked.connect(self.rename_tors_spring)
         self.ui.chkEnabledTorsSpring.toggled.connect(self.toggle_tors_spring_enabled)
+        self.ui.chkNonLinearTorsSpring.toggled.connect(self.toggle_nonlinear_tors_spring)
+        self.ui.Edit_NonLinearTorsSpring.textChanged.connect(self.validate_nonlinear_tors_spring_expression)
        
        # --- UI Connections: Contacts ---
         self.ui.btnAddContact.clicked.connect(self.add_contact)
@@ -1290,6 +1299,248 @@ class PhysicsEngineMain(QMainWindow):
         print(f"Imported {blocks_processed} distinct bodies from '{original_cad_name}'.")        
 
     # ==========================================
+    # --- URDF ROBOT IMPORT ---
+    # Imports a robot described in URDF (Unified Robot Description Format, e.g. Unitree G1)
+    # as native SimPhant RigidBody/Joint/RFrame objects. Collision geometry and joint
+    # limits (lower/upper/effort/velocity) are intentionally ignored -- SimPhant has no
+    # equivalent concepts yet. Mass/CoG/inertia are assigned directly from the URDF
+    # <inertial> blocks (bypassing the usual mesh volume-integral calculation), and meter
+    # units are scaled to SimPhant's native millimeter mesh convention.
+    # ==========================================
+    URDF_JOINT_TYPE_MAP = {
+        'revolute': JointType.REVOLUTE,
+        'continuous': JointType.REVOLUTE,  # Unlimited revolute -- SimPhant ignores limits anyway
+        'prismatic': JointType.PRISMATIC,
+        'fixed': JointType.FIXED,
+        'planar': JointType.PLANAR,
+        # 'floating' is intentionally absent: a floating joint imposes no constraint at all,
+        # so it is handled by skipping Joint creation entirely (see _process_urdf_robot).
+    }
+
+    def import_urdf_robot(self):
+        """ File-dialog entry point for actionImport_URDF: parses a .urdf file and builds
+        the corresponding bodies/RFrames/joints via _process_urdf_robot(). """
+        default_dir = self._get_existing_working_dir()
+
+        file_filter = "URDF Files (*.urdf);;All Files (*)"
+        file_path, _ = QFileDialog.getOpenFileName(self, "Import URDF Robot", default_dir, file_filter)
+        if not file_path:
+            return
+
+        try:
+            robot = unit_urdf_import.UrdfRobot.parse(file_path)
+        except unit_urdf_import.UrdfParseError as e:
+            QMessageBox.critical(self, "URDF Import Error", f"Failed to parse URDF file:\n{str(e)}")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "URDF Import Error", f"Failed to read URDF file:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+            return
+
+        try:
+            stats = self._process_urdf_robot(robot)
+        except Exception as e:
+            QMessageBox.critical(self, "URDF Import Error", f"Failed to build robot bodies/joints:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+            return
+
+        summary_msg = (
+            f"Imported '{robot.name}':\n"
+            f"  {stats['bodies_created']} rigid bodies\n"
+            f"  {stats['rframes_created']} placeholder reference frames\n"
+            f"  {stats['joints_created']} joints ({len(stats['joints_skipped'])} skipped)"
+        )
+        if stats['warnings']:
+            summary_msg += "\n\nNotes:\n" + "\n".join(stats['warnings'])
+            QMessageBox.warning(self, "URDF Import Complete", summary_msg)
+        else:
+            QMessageBox.information(self, "URDF Import Complete", summary_msg)
+
+    @staticmethod
+    def _rgba_to_hex(rgba):
+        """ Converts a URDF material's (r, g, b, a) floats in [0, 1] to SimPhant's "#rrggbb" color format. """
+        r, g, b, _a = rgba
+        r = int(round(np.clip(r, 0.0, 1.0) * 255))
+        g = int(round(np.clip(g, 0.0, 1.0) * 255))
+        b = int(round(np.clip(b, 0.0, 1.0) * 255))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    @staticmethod
+    def _unique_component_name(base_name, existing_names):
+        """ Appends a numeric suffix if base_name already exists, to keep imported names unique
+        in projects that already have bodies/RFrames/joints sharing the same URDF link/joint names. """
+        if base_name not in existing_names:
+            return base_name
+        counter = 2
+        candidate = f"{base_name}_{counter}"
+        while candidate in existing_names:
+            counter += 1
+            candidate = f"{base_name}_{counter}"
+        return candidate
+
+    def _process_urdf_robot(self, robot):
+        """ Core orchestration: walks the parsed URDF tree via forward kinematics and
+        builds one RigidBody per link with visual geometry (URDF-assigned mass/CoG/
+        inertia, world-placed mesh), one RFrame-only entry per meshless placeholder
+        link (e.g. 'imu_in_pelvis', 'd435_link'), and one Joint per URDF joint whose
+        child is a real body. Returns a small stats dict for the caller's UI summary. """
+        warnings = []
+
+        world_transforms = unit_urdf_import.compute_forward_kinematics(robot)
+        link_meshes = unit_urdf_import.load_all_link_meshes(robot, warn_callback=warnings.append)
+
+        existing_body_names = set(self.physics_bodies.keys())
+        existing_rf_names = {rf.name for rf in self.rframes}
+
+        body_for_link = {}           # link name -> RigidBody, only for links that became real bodies
+        nearest_ancestor_body = {}   # link name -> RigidBody or None: self if real body, else nearest real-body ancestor
+        bodies_created = 0
+        rframes_created = 0
+
+        # --- Pass 1: one RigidBody (real geometry) or one RFrame (meshless placeholder) per link ---
+        for link, parent_joint in robot.iter_links_breadth_first():
+            T_world = world_transforms[link.name]
+
+            if link.name in link_meshes:
+                body_name = self._unique_component_name(link.name, existing_body_names)
+                existing_body_names.add(body_name)
+
+                world_mesh_mm = unit_urdf_import.place_mesh_in_world(link_meshes[link.name], T_world)
+
+                mass_props = unit_urdf_import.world_mass_properties(link, T_world)
+                if mass_props is None:
+                    # Visual geometry present but no <inertial> block -- fall back to SimPhant's
+                    # own volumetric mass estimate from the mesh (same as a normal CAD import),
+                    # rather than risk a zero-mass body reaching the solver.
+                    warnings.append(f"Link '{link.name}' has no <inertial> data; mass/inertia estimated from its mesh volume instead.")
+
+                color_hex = "slategray"
+                for visual in link.visuals:
+                    if visual.color_rgba is not None:
+                        color_hex = self._rgba_to_hex(visual.color_rgba)
+                        break
+
+                new_body = self._create_body_from_trimesh(
+                    world_mesh_mm, body_name, color=color_hex,
+                    external_mass_properties=mass_props, reset_camera=False,
+                )
+                body_for_link[link.name] = new_body
+                nearest_ancestor_body[link.name] = new_body
+                bodies_created += 1
+            else:
+                # Meshless placeholder link (bare sensor/attachment frame, no mass/geometry at
+                # all) -- create a persisted RFrame only, parented to the nearest real-body
+                # ancestor so it still shows up attached to something sensible in the tree.
+                rf_name = self._unique_component_name(link.name, existing_rf_names)
+                existing_rf_names.add(rf_name)
+
+                parent_body = nearest_ancestor_body.get(parent_joint.parent) if parent_joint else None
+
+                placeholder_rf = RFrame(
+                    name=rf_name, position=T_world[:3, 3], orientation=np.zeros(3),
+                    transform_matrix=T_world[:3, :3], plotter=self.plotter,
+                    parent_body=parent_body, is_cog=False,
+                )
+                self.rframes.append(placeholder_rf)
+                QTreeWidgetItem(self.node_rframes, [rf_name])
+                nearest_ancestor_body[link.name] = parent_body
+                rframes_created += 1
+
+        # --- Pass 2: one Joint per URDF joint whose child is a real body ---
+        existing_joint_names = {j.name for j in self.joints_list}
+        joints_created = 0
+        joints_skipped = []
+
+        for joint in robot.joints.values():
+            body_j = body_for_link.get(joint.child)
+            if body_j is None:
+                # Child is a meshless placeholder -- only its RFrame was created (per decision).
+                joints_skipped.append(joint.name)
+                continue
+
+            body_i = nearest_ancestor_body.get(joint.parent)
+            if body_i is None:
+                warnings.append(f"Joint '{joint.name}': could not resolve a real parent body; skipped.")
+                joints_skipped.append(joint.name)
+                continue
+
+            if joint.joint_type == 'floating':
+                # A floating joint imposes no constraint at all (6 free DoF) -- matches how
+                # the root link's own (commented-out) floating base joint is already handled:
+                # simply skip Joint creation, leaving the two bodies kinematically independent.
+                joints_skipped.append(joint.name)
+                continue
+
+            j_type = self.URDF_JOINT_TYPE_MAP.get(joint.joint_type)
+            if j_type is None:
+                warnings.append(f"Joint '{joint.name}': unsupported type '{joint.joint_type}'; skipped.")
+                joints_skipped.append(joint.name)
+                continue
+
+            joint_name = self._unique_component_name(joint.name, existing_joint_names)
+            existing_joint_names.add(joint_name)
+
+            new_joint = Joint(name=joint_name, joint_type=j_type, body_i=body_i, body_j=body_j, plotter=self.plotter)
+
+            anchor_pos = unit_urdf_import.joint_world_anchor(joint, world_transforms)
+            axis_world = unit_urdf_import.joint_world_axis(joint, world_transforms)
+            child_rotation = world_transforms[joint.child][:3, :3]
+
+            # One real, persisted anchor RFrame per joint, for UI consistency/discoverability
+            # with the existing manual joint-creation workflow.
+            anchor_rf_name = self._unique_component_name(f"RF_{joint_name}", existing_rf_names)
+            existing_rf_names.add(anchor_rf_name)
+            anchor_rf = RFrame(
+                name=anchor_rf_name, position=anchor_pos, orientation=np.zeros(3),
+                transform_matrix=child_rotation, plotter=self.plotter,
+                parent_body=body_j, is_cog=False,
+            )
+            self.rframes.append(anchor_rf)
+            QTreeWidgetItem(self.node_rframes, [anchor_rf_name])
+
+            # Throwaway target RFrame (anchor + axis*epsilon) purely to stamp the joint's
+            # axis direction -- mirrors add_custom_joint()'s auto-generated Target RF, which
+            # is likewise created, used once, and immediately discarded (never persisted).
+            target_rf = RFrame(
+                name=f"__urdf_target_{joint_name}", position=anchor_pos + axis_world * 0.001,
+                orientation=np.zeros(3), transform_matrix=child_rotation,
+                plotter=self.plotter, parent_body=body_j, is_cog=False,
+            )
+            new_joint.apply_initial_rfs(anchor_rf=anchor_rf, target_rf=target_rf)
+            for act in target_rf.actors:
+                self.plotter.remove_actor(act)
+
+            current_scale = self.rframes[0].base_scale if self.rframes else 10.0
+            new_joint.update_transform(current_scale)
+
+            self.joints_list.append(new_joint)
+            QTreeWidgetItem(self.node_joints, [new_joint.name])
+            joints_created += 1
+
+        # --- Finalize UI and Camera ---
+        self.node_bodies.setExpanded(True)
+        self.node_rframes.setExpanded(True)
+        self.node_joints.setExpanded(True)
+        self.update_rframe_scales()
+        self.plotter.reset_camera()
+
+        print(robot.summary())
+        print(f"[URDF Import] Created {bodies_created} bodies, {rframes_created} placeholder RFrames, "
+              f"{joints_created} joints ({len(joints_skipped)} joints skipped).")
+        for msg in warnings:
+            print(f"[URDF Import] {msg}")
+
+        return {
+            "bodies_created": bodies_created,
+            "rframes_created": rframes_created,
+            "joints_created": joints_created,
+            "joints_skipped": joints_skipped,
+            "warnings": warnings,
+        }
+
+    # ==========================================
     # --- SELECTION & VISUAL LOGIC ---
     # ==========================================
     
@@ -1966,6 +2217,12 @@ class PhysicsEngineMain(QMainWindow):
                 self.ui.Edit_DampingCompSpring.setText(f"{spring.damping / 1000.0}")
                 self.ui.Edit_PreloadCompSpring.setText(f"{spring.preload}")
                 
+                self.ui.chkNonLinearComprSpring.blockSignals(True)
+                self.ui.chkNonLinearComprSpring.setChecked(getattr(spring, 'is_nonlinear', False))
+                self.ui.chkNonLinearComprSpring.blockSignals(False)
+                self.ui.Edit_NonLinearComprSpring.setText(getattr(spring, 'nonlinear_expr', '0'))
+                self.toggle_nonlinear_comp_spring(getattr(spring, 'is_nonlinear', False))
+                
                 self.ui.chkEnabledCompSpring.blockSignals(True)
                 self.ui.chkEnabledCompSpring.setChecked(spring.enabled)
                 self.ui.chkEnabledCompSpring.blockSignals(False)
@@ -1986,6 +2243,12 @@ class PhysicsEngineMain(QMainWindow):
                 self.ui.Edit_StiffnessTorsSpring.setText(f"{spring.stiffness * 1000.0:.3f}")
                 self.ui.Edit_DampingTorsSpring.setText(f"{spring.damping * 1000.0:.3f}")
                 self.ui.Edit_PreloadTorsSpring.setText(f"{spring.preload * 1000.0:.3f}")
+                
+                self.ui.chkNonLinearTorsSpring.blockSignals(True)
+                self.ui.chkNonLinearTorsSpring.setChecked(getattr(spring, 'is_nonlinear', False))
+                self.ui.chkNonLinearTorsSpring.blockSignals(False)
+                self.ui.Edit_NonLinearTorsSpring.setText(getattr(spring, 'nonlinear_expr', '0'))
+                self.toggle_nonlinear_tors_spring(getattr(spring, 'is_nonlinear', False))
                 
                 self.ui.chkEnabledTorsSpring.blockSignals(True)
                 self.ui.chkEnabledTorsSpring.setChecked(spring.enabled)
@@ -2099,6 +2362,9 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.chkCandidateReduction.blockSignals(True)
             self.ui.chkCandidateReduction.setChecked(getattr(contact, 'contact_candidate_reduction_enabled', True))
             self.ui.chkCandidateReduction.blockSignals(False)
+            
+            # --- Load Penetration Depth: SI (m) -> UI (mm) ---
+            self.ui.Edit_PenetrationDepth.setText(f"{getattr(contact, 'd_max_m', 0.0001) * 1000.0:.3f}")
     
         # --- Double-click on a Gear Constraint ---
         elif hasattr(self, 'gear_pairs_list') and any(g.name == item_name for g in self.gear_pairs_list):
@@ -2663,8 +2929,12 @@ class PhysicsEngineMain(QMainWindow):
 
         return union_geom, "pyvista"
 
-    def _create_body_from_trimesh(self, geom, body_name, color="lightblue", density=DEFAULT_DENSITY, reset_camera=True):
-        """Wraps a trimesh solid into the standard body, CoG RF, and gravity pipeline."""
+    def _create_body_from_trimesh(self, geom, body_name, color="lightblue", density=DEFAULT_DENSITY, reset_camera=True, external_mass_properties=None):
+        """Wraps a trimesh solid into the standard body, CoG RF, and gravity pipeline.
+
+        external_mass_properties, when provided as (mass, cog_m, inertia_tensor), bypasses
+        the mesh volume-integral calculation entirely (used by the URDF importer, which
+        already supplies exact mass/CoG/inertia from the robot description)."""
         faces_padded = np.insert(geom.faces, 0, 3, axis=1)
         pv_mesh = pv.PolyData(geom.vertices, faces_padded.flatten())
         pv_mesh = pv_mesh.clean().triangulate().compute_normals(split_vertices=True, feature_angle=60)
@@ -2678,7 +2948,8 @@ class PhysicsEngineMain(QMainWindow):
         )
         tree_item = QTreeWidgetItem(self.node_bodies, [body_name])
 
-        new_body = RigidBody(body_name, geom.copy(), pv_mesh, actor, tree_item, density=density)
+        new_body = RigidBody(body_name, geom.copy(), pv_mesh, actor, tree_item, density=density,
+                              external_mass_properties=external_mass_properties)
         new_body.base_color = color
         new_body.center_and_align_mesh()
 
@@ -4120,13 +4391,10 @@ class PhysicsEngineMain(QMainWindow):
             counter += 1
             new_name = f"{base_new_name}_{counter}"
 
-        # 2. Deep copy the underlying mesh data
+        # 2. Deep copy the underlying geometry. The source PyVista mesh is already centered on the
+        #    CoG and aligned to the principal axes, so it is cloned as-is (no re-alignment needed).
         new_raw_geom = src_body.raw_geom.copy()
-        
-        # --- Rebuild the PyVista mesh instead of looking for the missing attribute! ---
-        faces_padded = np.insert(new_raw_geom.faces, 0, 3, axis=1)
-        new_block_mesh = pv.PolyData(new_raw_geom.vertices, faces_padded.flatten())
-        new_block_mesh = new_block_mesh.clean().compute_normals(split_vertices=True, feature_angle=60)
+        new_block_mesh = src_body.mesh.copy(deep=True)
 
         # 3. Build the new PyVista Actor
         new_actor = self.plotter.add_mesh(new_block_mesh, color=src_body.base_color, 
@@ -4135,23 +4403,18 @@ class PhysicsEngineMain(QMainWindow):
         if not src_body.visible:
             new_actor.SetVisibility(False)
 
-        # 4. Build the new RigidBody Object
+        # 4. Build the new RigidBody Object -- all mass properties are copied from the source,
+        #    never recalculated (a recalculation would discard URDF-supplied mass/inertia).
         new_tree_item = QTreeWidgetItem(self.node_bodies, [new_name])
-        new_body = RigidBody(new_name, new_raw_geom, new_block_mesh, new_actor, new_tree_item)
-        
-        # Center the mathematical inertia tensor based on the cloned geometry
-        new_body.center_and_align_mesh() 
+        new_body = RigidBody(new_name, new_raw_geom, new_block_mesh, new_actor, new_tree_item,
+                             skip_mass_calculation=True)
+        new_body.copy_mass_properties_from(src_body)
+        new_body.generate_local_aabb()
         
         # 5. Perfect Spatial Overlap & Properties Match
-        new_body.cog = src_body.cog.copy()
-        new_body.principal_axes = src_body.principal_axes.copy()
-        new_body.pos_angles = src_body.pos_angles.copy()
         new_body.base_color = src_body.base_color
         new_body.enabled = src_body.enabled
         new_body.visible = src_body.visible
-        
-        # Recalculate exact mass and inertia using the original density!
-        new_body.update_density(src_body.density) 
         
         # Push the exact same 3D transform matrix to the GPU
         new_body.update_graphics_matrix(new_body.cog, new_body.principal_axes)
@@ -5013,7 +5276,8 @@ class PhysicsEngineMain(QMainWindow):
         elif axis_choice == 'Y': global_dir = rf.transform_matrix[:, 1]
         else: global_dir = rf.transform_matrix[:, 2] # Default Z
             
-        global_vec = global_dir * magnitude
+        # --- Direction only: the sign/magnitude is owned solely by the compiled expression! ---
+        global_vec = global_dir
         
         # --- THE FIX: Pass Global or Local based on the user's selection! ---
         if f_frame == ForceFrame.SPACE_FIXED:
@@ -5145,6 +5409,21 @@ class PhysicsEngineMain(QMainWindow):
             except Exception:
                 self.ui.Edit_MotionFunction.setStyleSheet("background-color: #ffcccc; color: black;")
     
+    @staticmethod
+    def _validate_two_arg_field(widget, text, arg1, arg2):
+        """ Colors a spring F(arg1, arg2) text box RED if the expression is empty or broken. """
+        expr_str = text.strip()
+        ok = bool(expr_str) and compile_two_arg_expression(expr_str, arg1, arg2)[1]
+        widget.setStyleSheet("" if ok else "background-color: #ffcccc; color: black;")
+
+    def validate_nonlinear_spring_expression(self, text):
+        """ Real-time compiler check for the Non-Linear Spring F(x, v). """
+        self._validate_two_arg_field(self.ui.Edit_NonLinearComprSpring, text, "x", "v")
+
+    def validate_nonlinear_tors_spring_expression(self, text):
+        """ Real-time compiler check for the Non-Linear Torsion Spring T(theta, omega). """
+        self._validate_two_arg_field(self.ui.Edit_NonLinearTorsSpring, text, "theta", "omega")
+    
     # ==========================================
     # --- COMPRESSION SPRINGS ---
     # ==========================================
@@ -5161,6 +5440,12 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.Edit_DampingCompSpring.setText("0.001")
         self.ui.Edit_PreloadCompSpring.setText("0.0")
         
+        self.ui.chkNonLinearComprSpring.blockSignals(True)
+        self.ui.chkNonLinearComprSpring.setChecked(False)
+        self.ui.chkNonLinearComprSpring.blockSignals(False)
+        self.ui.Edit_NonLinearComprSpring.setText("0")
+        self.toggle_nonlinear_comp_spring(False)
+        
         self.ui.chkEnabledCompSpring.blockSignals(True)
         self.ui.chkEnabledCompSpring.setChecked(True)
         self.ui.chkEnabledCompSpring.blockSignals(False)
@@ -5168,6 +5453,12 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnAddCompSpring.setEnabled(True)
         self.ui.dckProperties.show()
         self.ui.stckProperties.setCurrentIndex(5) 
+
+    def toggle_nonlinear_comp_spring(self, checked):
+        """ Disables Stiffness/Damping and enables F(x, v) when the Non-Linear mode is active. """
+        self.ui.Edit_StiffnessCompSpring.setEnabled(not checked)
+        self.ui.Edit_DampingCompSpring.setEnabled(not checked)
+        self.ui.Edit_NonLinearComprSpring.setEnabled(checked)
 
     def add_comp_spring(self):
         body_i_name = self.ui.Edit_BodyI_CompSpring.text().strip()
@@ -5203,6 +5494,10 @@ class PhysicsEngineMain(QMainWindow):
         spring.stiffness = k_si
         spring.damping = c_si
         spring.preload = p_si
+        
+        spring.is_nonlinear = self.ui.chkNonLinearComprSpring.isChecked()
+        if spring.is_nonlinear:
+            spring.compile_nonlinear_force(self.ui.Edit_NonLinearComprSpring.text())
 
         # Lock in the geometric vectors
         spring.bind_kinematics(self.rframes)
@@ -5229,6 +5524,10 @@ class PhysicsEngineMain(QMainWindow):
             spring.damping = parse_ui_float(self.ui.Edit_DampingCompSpring.text()) * 1000.0
             spring.preload = parse_ui_float(self.ui.Edit_PreloadCompSpring.text())
         except ValueError: return
+        
+        spring.is_nonlinear = self.ui.chkNonLinearComprSpring.isChecked()
+        if spring.is_nonlinear:
+            spring.compile_nonlinear_force(self.ui.Edit_NonLinearComprSpring.text())
         
         self.invalidate_results()
         print(f"Updated {spring.name}")
@@ -5328,6 +5627,12 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.Edit_DampingTorsSpring.setText("0.01")
         self.ui.Edit_PreloadTorsSpring.setText("0.0")
         
+        self.ui.chkNonLinearTorsSpring.blockSignals(True)
+        self.ui.chkNonLinearTorsSpring.setChecked(False)
+        self.ui.chkNonLinearTorsSpring.blockSignals(False)
+        self.ui.Edit_NonLinearTorsSpring.setText("0")
+        self.toggle_nonlinear_tors_spring(False)
+        
         self.ui.chkEnabledTorsSpring.blockSignals(True)
         self.ui.chkEnabledTorsSpring.setChecked(True)
         self.ui.chkEnabledTorsSpring.blockSignals(False)
@@ -5335,6 +5640,12 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnAddTorsSpring.setEnabled(True)
         self.ui.dckProperties.show()
         self.ui.stckProperties.setCurrentIndex(6) 
+
+    def toggle_nonlinear_tors_spring(self, checked):
+        """ Disables Stiffness/Damping and enables T(theta, omega) when the Non-Linear mode is active. """
+        self.ui.Edit_StiffnessTorsSpring.setEnabled(not checked)
+        self.ui.Edit_DampingTorsSpring.setEnabled(not checked)
+        self.ui.Edit_NonLinearTorsSpring.setEnabled(checked)
 
     def add_tors_spring(self):
         body_i_name = self.ui.Edit_BodyI_TorsSpring.text().strip()
@@ -5370,6 +5681,10 @@ class PhysicsEngineMain(QMainWindow):
         spring.stiffness = k_si
         spring.damping = c_si
         spring.preload = p_si
+        
+        spring.is_nonlinear = self.ui.chkNonLinearTorsSpring.isChecked()
+        if spring.is_nonlinear:
+            spring.compile_nonlinear_torque(self.ui.Edit_NonLinearTorsSpring.text())
 
         # Lock in the geometric vectors
         axis_choice = self.ui.cmbSpringBodyIAnchorXYZ.currentText().strip().upper()
@@ -5402,6 +5717,10 @@ class PhysicsEngineMain(QMainWindow):
             spring.axis_choice = self.ui.cmbSpringBodyIAnchorXYZ.currentText().strip().upper()
             spring.rf_j_name = self.ui.Edit_RFBodyJ_TorsSpring.text().strip()
         except ValueError: return
+        
+        spring.is_nonlinear = self.ui.chkNonLinearTorsSpring.isChecked()
+        if spring.is_nonlinear:
+            spring.compile_nonlinear_torque(self.ui.Edit_NonLinearTorsSpring.text())
         
         self.invalidate_results()
         print(f"Updated {spring.name}")
@@ -5679,6 +5998,9 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.Edit_ContactDamping.setText("10.0")
         self.ui.dsbForceExponent.setValue(1.5)
         
+        # --- Default Penetration Depth (damping saturation band) ---
+        self.ui.Edit_PenetrationDepth.setText("0.1")
+        
         # --- Reset Friction UI ---
         self.ui.chkContactFriction.setChecked(False)
         self.ui.frmContactFriction.setEnabled(False)
@@ -5741,6 +6063,9 @@ class PhysicsEngineMain(QMainWindow):
             symmetric_search = self.ui.chkSymmetricContact.isChecked()
             candidate_reduction = self.ui.chkCandidateReduction.isChecked()
             
+            # --- Extract Penetration Depth (damping saturation band) ---
+            d_max_ui = parse_ui_float(self.ui.Edit_PenetrationDepth.text())
+            
         except ValueError: 
             print("Error: Invalid numerical values for contact parameters.")
             return
@@ -5764,7 +6089,8 @@ class PhysicsEngineMain(QMainWindow):
             slip_tol_ui=slip_val,   
             mesh_mode=m_mode,
             symmetric_contact_search=symmetric_search,
-            contact_candidate_reduction_enabled=candidate_reduction
+            contact_candidate_reduction_enabled=candidate_reduction,
+            d_max_ui=d_max_ui
         )
         
         self.contact_pairs.append(new_contact)
@@ -5802,6 +6128,9 @@ class PhysicsEngineMain(QMainWindow):
             # --- Update Narrow-Phase Tuning Properties ---
             contact.symmetric_contact_search = self.ui.chkSymmetricContact.isChecked()
             contact.contact_candidate_reduction_enabled = self.ui.chkCandidateReduction.isChecked()
+            
+            # --- Update Penetration Depth: UI (mm) -> SI (m) ---
+            contact.d_max_m = parse_ui_float(self.ui.Edit_PenetrationDepth.text()) / 1000.0
             
             contact.exponent = n_exp
             # UI (N/mm^n) -> SI (N/m^n)

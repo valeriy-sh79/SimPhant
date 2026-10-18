@@ -1555,6 +1555,7 @@
     <addaction name="separator"/>
     <addaction name="actionImport_OBJ"/>
     <addaction name="actionImport_CAD"/>
+    <addaction name="actionImport_URDF"/>
     <addaction name="separator"/>
     <addaction name="actionExit"/>
    </widget>
@@ -4153,6 +4154,34 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </layout>
             </item>
             <item>
+             <layout class="QGridLayout" name="gridLayout_70">
+              <item row="0" column="0" colspan="2">
+               <widget class="QCheckBox" name="chkNonLinearComprSpring">
+                <property name="text">
+                 <string>Non Linear Spring Damper</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="label_57">
+                <property name="text">
+                 <string>F (x, v) =</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <widget class="QLineEdit" name="Edit_NonLinearComprSpring">
+                <property name="toolTip">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the Non-Linear Spring Force F(x, v).&lt;/p&gt;&lt;p&gt;Follows the spring force convention: F_spring = F_preload - F(x, v).&lt;/p&gt;&lt;p&gt;x = &amp;Delta;L = L - L_initial, in mm (positive when stretched).&lt;/p&gt;&lt;p&gt;v = d(&amp;Delta;L)/dt, in mm/s.&lt;/p&gt;&lt;p&gt;F(x, v) must be returned in N.&lt;/p&gt;&lt;p&gt;Example: to replicate a linear Stiffness K and Damping C, enter: -K*x - C*v&lt;/p&gt;&lt;p&gt;It is possible to use ‘np.’ to call any standard NumPy math function, for example:&lt;/p&gt;&lt;p&gt;np.cosh(x), np.sign(v), etc.&lt;/p&gt;&lt;p&gt;Following custom functions are supported in the program:&lt;/p&gt;&lt;p&gt;The STEP function changes smoothly between two specified values.&lt;/p&gt;&lt;p&gt;Syntax: step(x; x0; F0; x1; F1)&lt;/p&gt;&lt;p&gt;The IF function:&lt;/p&gt;&lt;p&gt;Syntax: if(&amp;lt;condition&amp;gt;; &amp;lt;value if less or equal to 0&amp;gt;; &amp;lt;value if greater than 0&amp;gt;).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="text">
+                 <string>0</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
              <layout class="QGridLayout" name="gridLayout_36">
               <item row="0" column="1">
                <spacer name="horizontalSpacer_12">
@@ -4227,9 +4256,6 @@ li.checked::marker { content: &quot;\2612&quot;; }
             <string>Torsion Spring</string>
            </property>
            <layout class="QVBoxLayout" name="verticalLayout_18">
-            <property name="leftMargin">
-             <number>9</number>
-            </property>
             <item>
              <layout class="QGridLayout" name="gridLayout_30">
               <item row="0" column="0">
@@ -4462,6 +4488,34 @@ li.checked::marker { content: &quot;\2612&quot;; }
                <widget class="QLineEdit" name="Edit_PreloadTorsSpring">
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define the Spring initial Preload&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <layout class="QGridLayout" name="gridLayout_72">
+              <item row="0" column="0" colspan="2">
+               <widget class="QCheckBox" name="chkNonLinearTorsSpring">
+                <property name="text">
+                 <string>Non Linear Spring Damper</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="label_58">
+                <property name="text">
+                 <string>T (θ, ω) =</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <widget class="QLineEdit" name="Edit_NonLinearTorsSpring">
+                <property name="toolTip">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify the Non-Linear Spring Torque T(theta, omega).&lt;/p&gt;&lt;p&gt;Follows the spring torque convention: T_spring = T_preload - T(theta, omega).&lt;/p&gt;&lt;p&gt;theta = twist angle relative to the initial angle, in rad.&lt;/p&gt;&lt;p&gt;omega = d(theta)/dt, in rad/s.&lt;/p&gt;&lt;p&gt;T(theta, omega) must be returned in Nmm.&lt;/p&gt;&lt;p&gt;Example: to replicate a linear Stiffness K and Damping C, enter: -K*theta - C*omega&lt;/p&gt;&lt;p&gt;It is possible to use ‘np.’ to call any standard NumPy math function, for example:&lt;/p&gt;&lt;p&gt;np.cosh(theta), np.sign(omega), etc.&lt;/p&gt;&lt;p&gt;Following custom functions are supported in the program:&lt;/p&gt;&lt;p&gt;The STEP function changes smoothly between two specified values.&lt;/p&gt;&lt;p&gt;Syntax: step(theta; th0; T0; th1; T1)&lt;/p&gt;&lt;p&gt;The IF function:&lt;/p&gt;&lt;p&gt;Syntax: if(&amp;lt;condition&amp;gt;; &amp;lt;value if less or equal to 0&amp;gt;; &amp;lt;value if greater than 0&amp;gt;).&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="text">
+                 <string>0</string>
                 </property>
                </widget>
               </item>
@@ -5364,30 +5418,13 @@ li.checked::marker { content: &quot;\2612&quot;; }
                </widget>
               </item>
               <item row="1" column="0">
-               <widget class="QLabel" name="label_83">
-                <property name="text">
-                 <string>Damping, N/(mm/s)</string>
-                </property>
-               </widget>
-              </item>
-              <item row="1" column="1">
-               <widget class="QLineEdit" name="Edit_ContactDamping">
-                <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define Contact Damping (C) for the normal force calculation&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-                </property>
-                <property name="text">
-                 <string>1</string>
-                </property>
-               </widget>
-              </item>
-              <item row="2" column="0">
                <widget class="QLabel" name="label_84">
                 <property name="text">
                  <string>Force Exponent (e)</string>
                 </property>
                </widget>
               </item>
-              <item row="2" column="1">
+              <item row="1" column="1">
                <widget class="QDoubleSpinBox" name="dsbForceExponent">
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define Contact Force Exponent (e) depending on the contact pattern on the Hertzian contact model. For example: e=1.0 for the flat Contact, e=1.5 for cylindrical or spherical Contact.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
@@ -5400,6 +5437,40 @@ li.checked::marker { content: &quot;\2612&quot;; }
                 </property>
                 <property name="singleStep">
                  <double>0.100000000000000</double>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="0">
+               <widget class="QLabel" name="label_83">
+                <property name="text">
+                 <string>Damping, N/(mm/s)</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="1">
+               <widget class="QLineEdit" name="Edit_ContactDamping">
+                <property name="toolTip">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define Contact Damping (C) for the normal force calculation&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="text">
+                 <string>1</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="0">
+               <widget class="QLabel" name="label_95">
+                <property name="text">
+                 <string>Penetration Depth, (mm)</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="1">
+               <widget class="QLineEdit" name="Edit_PenetrationDepth">
+                <property name="toolTip">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Damping coefficient ramps from 0 to C (damping) at this penetration depth.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="text">
+                 <string>0,1</string>
                 </property>
                </widget>
               </item>
@@ -6558,7 +6629,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <string>Define the Dimension</string>
                 </property>
                 <property name="decimals">
-                 <number>1</number>
+                 <number>2</number>
                 </property>
                 <property name="minimum">
                  <double>0.000000000000000</double>
@@ -6587,7 +6658,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <string>Define the Dimension</string>
                 </property>
                 <property name="decimals">
-                 <number>1</number>
+                 <number>2</number>
                 </property>
                 <property name="minimum">
                  <double>0.000000000000000</double>
@@ -6616,7 +6687,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <string>Define the Dimension</string>
                 </property>
                 <property name="decimals">
-                 <number>1</number>
+                 <number>2</number>
                 </property>
                 <property name="minimum">
                  <double>0.000000000000000</double>
@@ -7273,6 +7344,11 @@ li.checked::marker { content: &quot;\2612&quot;; }
   <action name="actionDocumentation">
    <property name="text">
     <string>Documentation</string>
+   </property>
+  </action>
+  <action name="actionImport_URDF">
+   <property name="text">
+    <string>Import URDF...</string>
    </property>
   </action>
  </widget>

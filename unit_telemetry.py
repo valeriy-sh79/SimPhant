@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: unit_telemetry.py
 #  Description:
 #      Provides a graphical interface for post-processing and visualizing telemetry data 
@@ -342,10 +342,19 @@ class TelemetryWindow(QMainWindow):
                 ]
         elif category == "Spring":
             # For Bushings and Springs
-            variables_to_list = [
-                "Deflection_X (m/rad)", "Velocity_X (m/s)", 
-                "Force_Elastic (N/Nm)", "Force_Damping (N/Nm)", "Force_Total (N/Nm)"
-            ]
+            spring = next((s for s in self.springs if s.name == comp_name), None)
+            is_torsion = hasattr(spring, 'initial_angle')
+            defl_u, vel_u, load_u = ("rad", "rad/s", "Nm") if is_torsion else ("m", "m/s", "N")
+            if getattr(spring, 'is_nonlinear', False):
+                # Elastic/Damping split is meaningless for a user-defined characteristic
+                variables_to_list = [
+                    f"Deflection_X ({defl_u})", f"Velocity_X ({vel_u})", f"Force_Total ({load_u})"
+                ]
+            else:
+                variables_to_list = [
+                    f"Deflection_X ({defl_u})", f"Velocity_X ({vel_u})", 
+                    f"Force_Elastic ({load_u})", f"Force_Damping ({load_u})", f"Force_Total ({load_u})"
+                ]
         elif category == "Bushing":
             variables_to_list = [
                 "Deflection X (m)", "Deflection Y (m)", "Deflection Z (m)",
@@ -761,15 +770,22 @@ class TelemetryWindow(QMainWindow):
                                 v_j_glob = spring.body_j.velocity + np.cross(w_j_glob, r_j_glob)
                                 L_dot = np.dot(v_j_glob - v_i_glob, u_ij)
                                 delta_L = L - spring.initial_length
-                                F_def = spring.stiffness * delta_L
-                                F_damp = spring.damping * L_dot
-                                F_res = F_def + F_damp - spring.preload
                                 
-                                if "Deflection" in var_name: y_array[i] = delta_L
-                                elif "Velocity" in var_name: y_array[i] = L_dot
-                                elif "Force_Elastic" in var_name: y_array[i] = F_def
-                                elif "Force_Damping" in var_name: y_array[i] = F_damp
-                                elif "Force_Total" in var_name: y_array[i] = F_res
+                                if getattr(spring, 'is_nonlinear', False):
+                                    F_res = -spring.evaluate_nonlinear_force(delta_L, L_dot) - spring.preload
+                                    if "Deflection" in var_name: y_array[i] = delta_L
+                                    elif "Velocity" in var_name: y_array[i] = L_dot
+                                    elif "Force_Total" in var_name: y_array[i] = F_res
+                                else:
+                                    F_def = spring.stiffness * delta_L
+                                    F_damp = spring.damping * L_dot
+                                    F_res = F_def + F_damp - spring.preload
+                                    
+                                    if "Deflection" in var_name: y_array[i] = delta_L
+                                    elif "Velocity" in var_name: y_array[i] = L_dot
+                                    elif "Force_Elastic" in var_name: y_array[i] = F_def
+                                    elif "Force_Damping" in var_name: y_array[i] = F_damp
+                                    elif "Force_Total" in var_name: y_array[i] = F_res
                                 
                         elif hasattr(spring, 'initial_angle'): # Torsion Spring
                             w_i_glob = A_i @ spring.body_i.angular_velocity
@@ -790,15 +806,21 @@ class TelemetryWindow(QMainWindow):
                             if delta_theta > np.pi: delta_theta -= 2 * np.pi
                             elif delta_theta < -np.pi: delta_theta += 2 * np.pi
                             
-                            T_def = spring.stiffness * delta_theta
-                            T_damp = spring.damping * theta_dot
-                            T_res = T_def + T_damp - spring.preload
-                            
-                            if "Deflection" in var_name: y_array[i] = delta_theta
-                            elif "Velocity" in var_name: y_array[i] = theta_dot
-                            elif "Force_Elastic" in var_name: y_array[i] = T_def
-                            elif "Force_Damping" in var_name: y_array[i] = T_damp
-                            elif "Force_Total" in var_name: y_array[i] = T_res
+                            if getattr(spring, 'is_nonlinear', False):
+                                T_res = -spring.evaluate_nonlinear_torque(delta_theta, theta_dot) - spring.preload
+                                if "Deflection" in var_name: y_array[i] = delta_theta
+                                elif "Velocity" in var_name: y_array[i] = theta_dot
+                                elif "Force_Total" in var_name: y_array[i] = T_res
+                            else:
+                                T_def = spring.stiffness * delta_theta
+                                T_damp = spring.damping * theta_dot
+                                T_res = T_def + T_damp - spring.preload
+                                
+                                if "Deflection" in var_name: y_array[i] = delta_theta
+                                elif "Velocity" in var_name: y_array[i] = theta_dot
+                                elif "Force_Elastic" in var_name: y_array[i] = T_def
+                                elif "Force_Damping" in var_name: y_array[i] = T_damp
+                                elif "Force_Total" in var_name: y_array[i] = T_res
                 
                 # --- BUSHING MATH ---
                 elif category == "Bushing":

@@ -55,6 +55,8 @@ class Ui_MainWindow(object):
         self.actionShowTraceback.setObjectName(u"actionShowTraceback")
         self.actionDocumentation = QAction(MainWindow)
         self.actionDocumentation.setObjectName(u"actionDocumentation")
+        self.actionImport_URDF = QAction(MainWindow)
+        self.actionImport_URDF.setObjectName(u"actionImport_URDF")
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName(u"centralwidget")
         self.centralwidget.setEnabled(True)
@@ -1882,6 +1884,26 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_19.addLayout(self.gridLayout_35)
 
+        self.gridLayout_70 = QGridLayout()
+        self.gridLayout_70.setObjectName(u"gridLayout_70")
+        self.chkNonLinearComprSpring = QCheckBox(self.grbSpringCompression)
+        self.chkNonLinearComprSpring.setObjectName(u"chkNonLinearComprSpring")
+
+        self.gridLayout_70.addWidget(self.chkNonLinearComprSpring, 0, 0, 1, 2)
+
+        self.label_57 = QLabel(self.grbSpringCompression)
+        self.label_57.setObjectName(u"label_57")
+
+        self.gridLayout_70.addWidget(self.label_57, 1, 0, 1, 1)
+
+        self.Edit_NonLinearComprSpring = QLineEdit(self.grbSpringCompression)
+        self.Edit_NonLinearComprSpring.setObjectName(u"Edit_NonLinearComprSpring")
+
+        self.gridLayout_70.addWidget(self.Edit_NonLinearComprSpring, 1, 1, 1, 1)
+
+
+        self.verticalLayout_19.addLayout(self.gridLayout_70)
+
         self.gridLayout_36 = QGridLayout()
         self.gridLayout_36.setObjectName(u"gridLayout_36")
         self.horizontalSpacer_12 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -1920,7 +1942,6 @@ class Ui_MainWindow(object):
         self.grbSpringTorsion.setObjectName(u"grbSpringTorsion")
         self.verticalLayout_18 = QVBoxLayout(self.grbSpringTorsion)
         self.verticalLayout_18.setObjectName(u"verticalLayout_18")
-        self.verticalLayout_18.setContentsMargins(9, -1, -1, -1)
         self.gridLayout_30 = QGridLayout()
         self.gridLayout_30.setObjectName(u"gridLayout_30")
         self.label_38 = QLabel(self.grbSpringTorsion)
@@ -2068,6 +2089,26 @@ class Ui_MainWindow(object):
 
 
         self.verticalLayout_18.addLayout(self.gridLayout_25)
+
+        self.gridLayout_72 = QGridLayout()
+        self.gridLayout_72.setObjectName(u"gridLayout_72")
+        self.chkNonLinearTorsSpring = QCheckBox(self.grbSpringTorsion)
+        self.chkNonLinearTorsSpring.setObjectName(u"chkNonLinearTorsSpring")
+
+        self.gridLayout_72.addWidget(self.chkNonLinearTorsSpring, 0, 0, 1, 2)
+
+        self.label_58 = QLabel(self.grbSpringTorsion)
+        self.label_58.setObjectName(u"label_58")
+
+        self.gridLayout_72.addWidget(self.label_58, 1, 0, 1, 1)
+
+        self.Edit_NonLinearTorsSpring = QLineEdit(self.grbSpringTorsion)
+        self.Edit_NonLinearTorsSpring.setObjectName(u"Edit_NonLinearTorsSpring")
+
+        self.gridLayout_72.addWidget(self.Edit_NonLinearTorsSpring, 1, 1, 1, 1)
+
+
+        self.verticalLayout_18.addLayout(self.gridLayout_72)
 
         self.gridLayout_29 = QGridLayout()
         self.gridLayout_29.setObjectName(u"gridLayout_29")
@@ -2598,20 +2639,10 @@ class Ui_MainWindow(object):
 
         self.gridLayout_41.addWidget(self.Edit_ContactStiffness, 0, 1, 1, 1)
 
-        self.label_83 = QLabel(self.grbContacts)
-        self.label_83.setObjectName(u"label_83")
-
-        self.gridLayout_41.addWidget(self.label_83, 1, 0, 1, 1)
-
-        self.Edit_ContactDamping = QLineEdit(self.grbContacts)
-        self.Edit_ContactDamping.setObjectName(u"Edit_ContactDamping")
-
-        self.gridLayout_41.addWidget(self.Edit_ContactDamping, 1, 1, 1, 1)
-
         self.label_84 = QLabel(self.grbContacts)
         self.label_84.setObjectName(u"label_84")
 
-        self.gridLayout_41.addWidget(self.label_84, 2, 0, 1, 1)
+        self.gridLayout_41.addWidget(self.label_84, 1, 0, 1, 1)
 
         self.dsbForceExponent = QDoubleSpinBox(self.grbContacts)
         self.dsbForceExponent.setObjectName(u"dsbForceExponent")
@@ -2619,7 +2650,27 @@ class Ui_MainWindow(object):
         self.dsbForceExponent.setMaximum(2.500000000000000)
         self.dsbForceExponent.setSingleStep(0.100000000000000)
 
-        self.gridLayout_41.addWidget(self.dsbForceExponent, 2, 1, 1, 1)
+        self.gridLayout_41.addWidget(self.dsbForceExponent, 1, 1, 1, 1)
+
+        self.label_83 = QLabel(self.grbContacts)
+        self.label_83.setObjectName(u"label_83")
+
+        self.gridLayout_41.addWidget(self.label_83, 2, 0, 1, 1)
+
+        self.Edit_ContactDamping = QLineEdit(self.grbContacts)
+        self.Edit_ContactDamping.setObjectName(u"Edit_ContactDamping")
+
+        self.gridLayout_41.addWidget(self.Edit_ContactDamping, 2, 1, 1, 1)
+
+        self.label_95 = QLabel(self.grbContacts)
+        self.label_95.setObjectName(u"label_95")
+
+        self.gridLayout_41.addWidget(self.label_95, 3, 0, 1, 1)
+
+        self.Edit_PenetrationDepth = QLineEdit(self.grbContacts)
+        self.Edit_PenetrationDepth.setObjectName(u"Edit_PenetrationDepth")
+
+        self.gridLayout_41.addWidget(self.Edit_PenetrationDepth, 3, 1, 1, 1)
 
 
         self.verticalLayout_28.addLayout(self.gridLayout_41)
@@ -3231,7 +3282,7 @@ class Ui_MainWindow(object):
 
         self.dsbPrimDim1 = QDoubleSpinBox(self.grbPrimitives)
         self.dsbPrimDim1.setObjectName(u"dsbPrimDim1")
-        self.dsbPrimDim1.setDecimals(1)
+        self.dsbPrimDim1.setDecimals(2)
         self.dsbPrimDim1.setMinimum(0.000000000000000)
         self.dsbPrimDim1.setMaximum(9999.000000000000000)
         self.dsbPrimDim1.setSingleStep(1.000000000000000)
@@ -3246,7 +3297,7 @@ class Ui_MainWindow(object):
 
         self.dsbPrimDim2 = QDoubleSpinBox(self.grbPrimitives)
         self.dsbPrimDim2.setObjectName(u"dsbPrimDim2")
-        self.dsbPrimDim2.setDecimals(1)
+        self.dsbPrimDim2.setDecimals(2)
         self.dsbPrimDim2.setMinimum(0.000000000000000)
         self.dsbPrimDim2.setMaximum(9999.000000000000000)
         self.dsbPrimDim2.setSingleStep(1.000000000000000)
@@ -3261,7 +3312,7 @@ class Ui_MainWindow(object):
 
         self.dsbPrimDim3 = QDoubleSpinBox(self.grbPrimitives)
         self.dsbPrimDim3.setObjectName(u"dsbPrimDim3")
-        self.dsbPrimDim3.setDecimals(1)
+        self.dsbPrimDim3.setDecimals(2)
         self.dsbPrimDim3.setMinimum(0.000000000000000)
         self.dsbPrimDim3.setMaximum(9999.000000000000000)
         self.dsbPrimDim3.setSingleStep(1.000000000000000)
@@ -3601,6 +3652,7 @@ class Ui_MainWindow(object):
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionImport_OBJ)
         self.menuFile.addAction(self.actionImport_CAD)
+        self.menuFile.addAction(self.actionImport_URDF)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionExit)
         self.menuSettings.addAction(self.actionSetWorkingDir)
@@ -3643,6 +3695,7 @@ class Ui_MainWindow(object):
         self.actionAbout_SimPhant.setText(QCoreApplication.translate("MainWindow", u"About SimPhant", None))
         self.actionShowTraceback.setText(QCoreApplication.translate("MainWindow", u"Show Traceback Window", None))
         self.actionDocumentation.setText(QCoreApplication.translate("MainWindow", u"Documentation", None))
+        self.actionImport_URDF.setText(QCoreApplication.translate("MainWindow", u"Import URDF...", None))
 #if QT_CONFIG(tooltip)
         self.btnBody.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Open Body Properties panel</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
@@ -4344,6 +4397,12 @@ class Ui_MainWindow(object):
 #if QT_CONFIG(tooltip)
         self.Edit_PreloadCompSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define the Spring initial Preload</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
+        self.chkNonLinearComprSpring.setText(QCoreApplication.translate("MainWindow", u"Non Linear Spring Damper", None))
+        self.label_57.setText(QCoreApplication.translate("MainWindow", u"F (x, v) =", None))
+#if QT_CONFIG(tooltip)
+        self.Edit_NonLinearComprSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Specify the Non-Linear Spring Force F(x, v).</p><p>Follows the spring force convention: F_spring = F_preload - F(x, v).</p><p>x = &Delta;L = L - L_initial, in mm (positive when stretched).</p><p>v = d(&Delta;L)/dt, in mm/s.</p><p>F(x, v) must be returned in N.</p><p>Example: to replicate a linear Stiffness K and Damping C, enter: -K*x - C*v</p><p>It is possible to use \u2018np.\u2019 to call any standard NumPy math function, for example:</p><p>np.cosh(x), np.sign(v), etc.</p><p>Following custom functions are supported in the program:</p><p>The STEP function changes smoothly between two specified values.</p><p>Syntax: step(x; x0; F0; x1; F1)</p><p>The IF function:</p><p>Syntax: if(&lt;condition&gt;; &lt;value if less or equal to 0&gt;; &lt;value if greater than 0&gt;).</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.Edit_NonLinearComprSpring.setText(QCoreApplication.translate("MainWindow", u"0", None))
 #if QT_CONFIG(tooltip)
         self.btnUpdateCompSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Apply the Stiffness, Damping and Preload properties of the Spring</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
@@ -4402,6 +4461,12 @@ class Ui_MainWindow(object):
 #if QT_CONFIG(tooltip)
         self.Edit_PreloadTorsSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define the Spring initial Preload</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
+        self.chkNonLinearTorsSpring.setText(QCoreApplication.translate("MainWindow", u"Non Linear Spring Damper", None))
+        self.label_58.setText(QCoreApplication.translate("MainWindow", u"T (\u03b8, \u03c9) =", None))
+#if QT_CONFIG(tooltip)
+        self.Edit_NonLinearTorsSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Specify the Non-Linear Spring Torque T(theta, omega).</p><p>Follows the spring torque convention: T_spring = T_preload - T(theta, omega).</p><p>theta = twist angle relative to the initial angle, in rad.</p><p>omega = d(theta)/dt, in rad/s.</p><p>T(theta, omega) must be returned in Nmm.</p><p>Example: to replicate a linear Stiffness K and Damping C, enter: -K*theta - C*omega</p><p>It is possible to use \u2018np.\u2019 to call any standard NumPy math function, for example:</p><p>np.cosh(theta), np.sign(omega), etc.</p><p>Following custom functions are supported in the program:</p><p>The STEP function changes smoothly between two specified values.</p><p>Syntax: step(theta; th0; T0; th1; T1)</p><p>The IF function:</p><p>Syntax: if(&lt;condition&gt;; &lt;value if less or equal to 0&gt;; &lt;value if greater than 0&gt;).</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
+        self.Edit_NonLinearTorsSpring.setText(QCoreApplication.translate("MainWindow", u"0", None))
 #if QT_CONFIG(tooltip)
         self.chkEnabledTorsSpring.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Enable / disable selected Spring in the Simulation</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
@@ -4571,15 +4636,20 @@ class Ui_MainWindow(object):
         self.Edit_ContactStiffness.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define Contact Stiffness (k) for the normal force calculation</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.Edit_ContactStiffness.setText(QCoreApplication.translate("MainWindow", u"1000", None))
+        self.label_84.setText(QCoreApplication.translate("MainWindow", u"Force Exponent (e)", None))
+#if QT_CONFIG(tooltip)
+        self.dsbForceExponent.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define Contact Force Exponent (e) depending on the contact pattern on the Hertzian contact model. For example: e=1.0 for the flat Contact, e=1.5 for cylindrical or spherical Contact.</p></body></html>", None))
+#endif // QT_CONFIG(tooltip)
         self.label_83.setText(QCoreApplication.translate("MainWindow", u"Damping, N/(mm/s)", None))
 #if QT_CONFIG(tooltip)
         self.Edit_ContactDamping.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define Contact Damping (C) for the normal force calculation</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
         self.Edit_ContactDamping.setText(QCoreApplication.translate("MainWindow", u"1", None))
-        self.label_84.setText(QCoreApplication.translate("MainWindow", u"Force Exponent (e)", None))
+        self.label_95.setText(QCoreApplication.translate("MainWindow", u"Penetration Depth, (mm)", None))
 #if QT_CONFIG(tooltip)
-        self.dsbForceExponent.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Define Contact Force Exponent (e) depending on the contact pattern on the Hertzian contact model. For example: e=1.0 for the flat Contact, e=1.5 for cylindrical or spherical Contact.</p></body></html>", None))
+        self.Edit_PenetrationDepth.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Damping coefficient ramps from 0 to C (damping) at this penetration depth.</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)
+        self.Edit_PenetrationDepth.setText(QCoreApplication.translate("MainWindow", u"0,1", None))
 #if QT_CONFIG(tooltip)
         self.btnUpdateContact.setToolTip(QCoreApplication.translate("MainWindow", u"<html><head/><body><p>Apply the Stiffness, Damping and force Exponent properties of the Contact</p></body></html>", None))
 #endif // QT_CONFIG(tooltip)

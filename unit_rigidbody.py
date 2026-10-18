@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.0
+#  Version: 2026.10.1
 #  Module: unit_rigidbody.py
 #  Description:
 #      Computes and stores the exact physical properties of mechanical parts, including mass, 
@@ -35,7 +35,7 @@ DEFAULT_DENSITY = 7850.0  # Default density in kg/m^3 (Steel)
 
 class RigidBody:
     """ Python port of TRigidBody from Unit_RigidBody.pas """
-    def __init__(self, name, raw_geom, block_mesh, actor, tree_item, density=DEFAULT_DENSITY, is_ground=False):
+    def __init__(self, name, raw_geom, block_mesh, actor, tree_item, density=DEFAULT_DENSITY,     is_ground=False, external_mass_properties=None, skip_mass_calculation=False):
         self.name = name
         self.enabled = True
         self.visible = True
@@ -70,46 +70,125 @@ class RigidBody:
         self.I_check = np.eye(3)
         self.math_error = 0.0
         
-        # Only calculate physics if it is a real CAD mesh
-        if not self.is_ground:
-            self.calculate_mass_properties()
+        # Only calculate physics if it is a real CAD mesh.
+        # skip_mass_calculation: the caller (project loader) restores every mass property
+        # (volume, mass, CoG, inertia, axes) from saved data, so the mesh integral is not needed.
+        if not self.is_ground and not skip_mass_calculation:
+            if external_mass_properties is not None:
+                # URDF (or any other externally-supplied) exact mass/CoG/inertia -- skip the
+                # mesh volume-integral calculation entirely and trust the provided values.
+                ext_mass, ext_cog, ext_inertia_tensor = external_mass_properties
+                self.set_mass_properties(ext_mass, ext_cog, ext_inertia_tensor,
+                                         mesh_volume=self._measure_mesh_volume())
+            else:
+                self.calculate_mass_properties()
+
+    def _measure_mesh_volume(self):
+        """ Returns the raw mesh's enclosed volume in m^3, or None if it cannot be trusted
+        (no mesh, inconsistent triangle winding, or degenerate). Cheap: a signed-triangle sum,
+        no inertia integral. Robot meshes often have tiny open boundaries (not strictly watertight);
+        with consistent winding the signed volume is still a good approximation, so that is accepted. """
+        try:
+            if self.raw_geom is None or not self.raw_geom.is_winding_consistent:
+                return None
+            # Open meshes make the signed volume depend on the origin, so measure about the mesh's own center.
+            centered = self.raw_geom.copy()
+            centered.apply_translation(-centered.bounds.mean(axis=0))
+            volume = abs(float(centered.volume)) / (MMtoM ** 3)
+            return volume if volume > 1e-12 else None
+        except Exception:
+            return None
 
     def calculate_mass_properties(self):
+        """ Derives mass, CoG, and inertia from the raw mesh's volume integral (CAD-imported bodies). """
         try:
             physics_mesh = self.raw_geom.copy()
             physics_mesh.apply_scale(1.0 / MMtoM) 
             physics_mesh.density = self.density
             
             self.volume = physics_mesh.volume             
-            self.mass = physics_mesh.mass                 
-            self.cog = physics_mesh.center_mass           
+            mass = physics_mesh.mass                 
+            cog = physics_mesh.center_mass           
             
             if abs(self.volume) > 1e-12:
-                self.inertia_tensor = physics_mesh.moment_inertia 
-                
-                components, transform = math3d.calculate_principal_axes(self.inertia_tensor)
-                self.principal_inertia = components
-                self.principal_axes = transform
-                
-                I_p_matrix = np.diag(self.principal_inertia)
-                self.I_check = self.principal_axes @ I_p_matrix @ self.principal_axes.T
-                self.math_error = np.max(np.abs(self.inertia_tensor - self.I_check))
-                
-                # --- THE FIX: Yaw-Pitch-Roll formulation (Extrinsic XYZ) ---
-                r = Rotation.from_matrix(self.principal_axes)
-                euler_xyz = r.as_euler('xyz', degrees=True) 
-                
-                # Assign based on the logic: 0=Z(Yaw), 1=Y(Pitch), 2=X(Roll)
-                self.pos_angles = np.array([euler_xyz[2], euler_xyz[1], euler_xyz[0]]) 
+                self._finalize_mass_properties(mass, cog, physics_mesh.moment_inertia)
             else:
                 print(f"Note: '{self.name}' has negligible volume. Defaulting inertia to zero.")
+                self._finalize_mass_properties(mass, cog, inertia_tensor=None)
             
             #if not np.any(np.isnan(self.cog)):
             #    self.actor.origin = self.cog * MMtoM 
                 
         except Exception as e:
             print(f"Warning: Physics math bypassed for '{self.name}': {e}")
+
+    def set_mass_properties(self, mass, cog, inertia_tensor, mesh_volume=None):
+        """
+        Directly assigns mass, center of gravity, and inertia tensor from an external source
+        (e.g. a URDF <inertial> block, already expressed in this body's world/scene frame),
+        bypassing the mesh volume-integral calculation in calculate_mass_properties() entirely.
+        Runs the same principal-axis diagonalization so mesh alignment (center_and_align_mesh)
+        and RFrame orientation stay fully consistent with CAD-derived bodies.
+
+        URDF supplies mass/CoG/inertia only. When a trustworthy mesh_volume (m^3) is given, the
+        body reports that real volume and its effective density = mass / volume. Otherwise a
+        bookkeeping volume = mass / density (current density) is used. Either way
+        mass == density * volume holds, so update_density() keeps scaling mass and inertia together.
+        """
+        if mesh_volume is not None and mesh_volume > 1e-12 and mass > 1e-12:
+            self.volume = mesh_volume
+            self.density = mass / mesh_volume
+        else:
+            if mesh_volume is None:
+                print(f"Note: '{self.name}' has no reliable mesh volume; volume is derived from mass and default density.")
+            if self.density > 1e-12:
+                self.volume = mass / self.density
+
+        self._finalize_mass_properties(mass, cog, inertia_tensor)
+
+    def _finalize_mass_properties(self, mass, cog, inertia_tensor=None):
+        """
+        Shared tail for both calculation paths above: stamps mass/CoG and, when an inertia
+        tensor is supplied, diagonalizes it to principal axes and derives the display Euler
+        angles. Passing inertia_tensor=None mirrors the original "negligible volume" behavior:
+        mass/CoG are updated but inertia/principal axes are left at their __init__ defaults.
+        """
+        self.mass = mass
+        self.cog = np.asarray(cog, dtype=float)
+
+        if inertia_tensor is None:
+            return
+
+        self.inertia_tensor = np.asarray(inertia_tensor, dtype=float)
+
+        components, transform = math3d.calculate_principal_axes(self.inertia_tensor)
+        self.principal_inertia = components
+        self.principal_axes = transform
+
+        I_p_matrix = np.diag(self.principal_inertia)
+        self.I_check = self.principal_axes @ I_p_matrix @ self.principal_axes.T
+        self.math_error = np.max(np.abs(self.inertia_tensor - self.I_check))
+
+        # --- THE FIX: Yaw-Pitch-Roll formulation (Extrinsic XYZ) ---
+        r = Rotation.from_matrix(self.principal_axes)
+        euler_xyz = r.as_euler('xyz', degrees=True)
+
+        # Assign based on the logic: 0=Z(Yaw), 1=Y(Pitch), 2=X(Roll)
+        self.pos_angles = np.array([euler_xyz[2], euler_xyz[1], euler_xyz[0]])
     
+    def copy_mass_properties_from(self, src):
+        """ Clones every stored mass property from another body without any recalculation. """
+        self.density = src.density
+        self.volume = src.volume
+        self.mass = src.mass
+        self.cog = src.cog.copy()
+        self.inertia_tensor = src.inertia_tensor.copy()
+        self.principal_inertia = src.principal_inertia.copy()
+        self.principal_axes = src.principal_axes.copy()
+        self.pos_angles = src.pos_angles.copy()
+        self.I_check = src.I_check.copy()
+        self.math_error = src.math_error
+
     def update_density(self, new_density):
         """ 
         Safely updates the mass and inertia using a strict linear scaling ratio!
