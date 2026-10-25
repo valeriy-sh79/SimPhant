@@ -1568,6 +1568,7 @@
     <addaction name="separator"/>
     <addaction name="actionDocumentation"/>
     <addaction name="actionAbout_SimPhant"/>
+    <addaction name="actionCheck_for_updates"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuSettings"/>
@@ -2530,6 +2531,16 @@ li.checked::marker { content: &quot;\2612&quot;; }
              <string>Move Body with CoG</string>
             </property>
            </widget>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_96">
+           <property name="text">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Press and hold Shift to select a Reference Frame in the Viewport &lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
           </widget>
          </item>
          <item>
@@ -4664,7 +4675,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
               <item row="1" column="1">
                <widget class="QLineEdit" name="Edit_BodyJ_Bushing">
                 <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define second action Body or Ground&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define second action Body or Ground. The Bushing force acts on it; the reaction acts on Body I&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="readOnly">
                  <bool>true</bool>
@@ -4681,7 +4692,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
               <item row="0" column="1">
                <widget class="QLineEdit" name="Edit_BodyI_Bushing">
                 <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define first action Body or Ground&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Define first action Body or Ground. It carries the Bushing frame RF Body I: stiffness, damping and preload act along the axes of this frame, which move with Body I&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="readOnly">
                  <bool>true</bool>
@@ -4702,7 +4713,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
               <item row="0" column="1">
                <widget class="QLineEdit" name="Edit_RFBodyI_Bushing">
                 <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The Global Reference Frame defining the Bushing position as local Anchor points at Body_I and Body_J&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Required. The Reference Frame defining the Bushing: its position on Body I and the axes X, Y, Z of stiffness, damping and preload. The axes stay fixed to Body I: they move and rotate with it, independently of Body J&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="readOnly">
                  <bool>true</bool>
@@ -4712,7 +4723,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
               <item row="0" column="0">
                <widget class="QLabel" name="lbl_Bushing_RFBodyI">
                 <property name="text">
-                 <string>Anchor RF</string>
+                 <string>RF Body I</string>
                 </property>
                </widget>
               </item>
@@ -4720,6 +4731,9 @@ li.checked::marker { content: &quot;\2612&quot;; }
                <widget class="QLineEdit" name="Edit_RFBodyJ_Bushing">
                 <property name="enabled">
                  <bool>true</bool>
+                </property>
+                <property name="toolTip">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Optional. The Reference Frame defining the anchor point on Body J (its position and orientation). If empty, the anchor on Body J is placed exactly at the position and orientation of RF Body I.&lt;/p&gt;&lt;p&gt;In the initial pose of the model the Bushing deformation is zero (only the preload acts): deformations are measured from that pose.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="readOnly">
                  <bool>true</bool>
@@ -4817,7 +4831,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="1">
                   <widget class="QLineEdit" name="Edit_Kx">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness oriented along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness along the X-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4834,7 +4848,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="3">
                   <widget class="QLineEdit" name="Edit_KRx">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness oriented along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness about the X-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4851,7 +4865,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="1">
                   <widget class="QLineEdit" name="Edit_Ky">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness oriented along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness along the Y-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4868,7 +4882,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="3">
                   <widget class="QLineEdit" name="Edit_KRy">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness oriented along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness about the Y-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4885,7 +4899,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="1">
                   <widget class="QLineEdit" name="Edit_Kz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness oriented along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Stiffness along the Z-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4902,7 +4916,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="3">
                   <widget class="QLineEdit" name="Edit_KRz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness oriented along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Stiffness about the Z-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4964,7 +4978,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="1">
                   <widget class="QLineEdit" name="Edit_Cx">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping oriented along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping along the X-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4981,7 +4995,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="3">
                   <widget class="QLineEdit" name="Edit_CRx">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping oriented along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping about the X-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -4998,7 +5012,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="1">
                   <widget class="QLineEdit" name="Edit_Cy">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping oriented along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping along the Y-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -5015,7 +5029,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="3">
                   <widget class="QLineEdit" name="Edit_CRy">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping oriented along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping about the Y-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -5032,7 +5046,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="1">
                   <widget class="QLineEdit" name="Edit_Cz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping oriented along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Translational Damping along the Z-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -5049,7 +5063,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="3">
                   <widget class="QLineEdit" name="Edit_CRz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping oriented along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rotational Damping about the Z-axis of RF Body I (the axes are fixed to Body I)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>1</string>
@@ -5111,7 +5125,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="1">
                   <widget class="QLineEdit" name="Edit_Px">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the X-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -5128,7 +5142,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="1" column="3">
                   <widget class="QLineEdit" name="Edit_PRx">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload along the X-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload about the X-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -5145,7 +5159,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="1">
                   <widget class="QLineEdit" name="Edit_Py">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the Y-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -5162,7 +5176,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="2" column="3">
                   <widget class="QLineEdit" name="Edit_PRy">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload along the Y-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload about the Y-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -5179,7 +5193,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="1">
                   <widget class="QLineEdit" name="Edit_Pz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Force preload along the Z-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -5196,7 +5210,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
                  <item row="3" column="3">
                   <widget class="QLineEdit" name="Edit_PRz">
                    <property name="toolTip">
-                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload along the Z-axis of the Anchor RF&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Torque preload about the Z-axis of RF Body I (acts on Body J at zero deformation)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                    </property>
                    <property name="text">
                     <string>0</string>
@@ -7349,6 +7363,11 @@ li.checked::marker { content: &quot;\2612&quot;; }
   <action name="actionImport_URDF">
    <property name="text">
     <string>Import URDF...</string>
+   </property>
+  </action>
+  <action name="actionCheck_for_updates">
+   <property name="text">
+    <string>Check for updates</string>
    </property>
   </action>
  </widget>

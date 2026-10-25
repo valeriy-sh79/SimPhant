@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: unit_telemetry.py
 #  Description:
 #      Provides a graphical interface for post-processing and visualizing telemetry data 
@@ -822,56 +822,24 @@ class TelemetryWindow(QMainWindow):
                                 elif "Force_Damping" in var_name: y_array[i] = T_damp
                                 elif "Force_Total" in var_name: y_array[i] = T_res
                 
-                # --- BUSHING MATH ---
+                # --- BUSHING MATH (same evaluation as the solver) ---
                 elif category == "Bushing":
                     bushing = next((b for b in self.bushings if b.name == comp_name), None)
                     if bushing:
-                        A_i, A_j = bushing.body_i.principal_axes, bushing.body_j.principal_axes
+                        st = bushing.evaluate()
                         
-                        R_rf_i = A_i @ bushing.local_rot_i
-                        
-                        w_i_glob = A_i @ bushing.body_i.angular_velocity
-                        w_j_glob = A_j @ bushing.body_j.angular_velocity
-                        v_i_glob = bushing.body_i.velocity + np.cross(w_i_glob, A_i @ bushing.local_pos_i)
-                        v_j_glob = bushing.body_j.velocity + np.cross(w_j_glob, A_j @ bushing.local_pos_j)
-                        
-                        p_i = bushing.body_i.cog + A_i @ bushing.local_pos_i
-                        p_j = bushing.body_j.cog + A_j @ bushing.local_pos_j
-                        
-                        # Calculate translations
-                        delta_x = (R_rf_i.T @ (p_j - p_i)) - bushing.initial_local_pos_j
-                        v_rel_loc = R_rf_i.T @ (v_j_glob - v_i_glob)
-                        
-                        # Calculate rotations
-                        R_rel = R_rf_i.T @ A_j
-                        R_delta = R_rel @ bushing.initial_rel_rot.T
-                        
-                        angle = np.arccos(np.clip((np.trace(R_delta) - 1.0) / 2.0, -1.0, 1.0))
-                        if angle > 1e-8:
-                            axis = np.array([R_delta[2,1]-R_delta[1,2], R_delta[0,2]-R_delta[2,0], R_delta[1,0]-R_delta[0,1]])
-                            norm_axis = np.linalg.norm(axis)
-                            delta_theta = (axis / norm_axis) * angle if norm_axis > 1e-8 else np.zeros(3)
-                        else:
-                            delta_theta = np.zeros(3)
-                            
-                        w_rel_loc = R_rf_i.T @ (w_j_glob - w_i_glob)
-                        
-                        # Final 6-DOF Local Forces & Torques
-                        F_calc_loc = -(bushing.k_trans * delta_x) - (bushing.c_trans * v_rel_loc) + bushing.p_trans
-                        T_calc_loc = -(bushing.k_rot * delta_theta) - (bushing.c_rot * w_rel_loc) + bushing.p_rot
-                        
-                        if "Deflection X" in var_name: y_array[i] = delta_x[0]
-                        elif "Deflection Y" in var_name: y_array[i] = delta_x[1]
-                        elif "Deflection Z" in var_name: y_array[i] = delta_x[2]
-                        elif "Rotation X" in var_name: y_array[i] = delta_theta[0]
-                        elif "Rotation Y" in var_name: y_array[i] = delta_theta[1]
-                        elif "Rotation Z" in var_name: y_array[i] = delta_theta[2]
-                        elif "Force X" in var_name: y_array[i] = F_calc_loc[0]
-                        elif "Force Y" in var_name: y_array[i] = F_calc_loc[1]
-                        elif "Force Z" in var_name: y_array[i] = F_calc_loc[2]
-                        elif "Torque X" in var_name: y_array[i] = T_calc_loc[0]
-                        elif "Torque Y" in var_name: y_array[i] = T_calc_loc[1]
-                        elif "Torque Z" in var_name: y_array[i] = T_calc_loc[2]
+                        if "Deflection X" in var_name: y_array[i] = st.u[0]
+                        elif "Deflection Y" in var_name: y_array[i] = st.u[1]
+                        elif "Deflection Z" in var_name: y_array[i] = st.u[2]
+                        elif "Rotation X" in var_name: y_array[i] = st.phi[0]
+                        elif "Rotation Y" in var_name: y_array[i] = st.phi[1]
+                        elif "Rotation Z" in var_name: y_array[i] = st.phi[2]
+                        elif "Force X" in var_name: y_array[i] = st.F_loc[0]
+                        elif "Force Y" in var_name: y_array[i] = st.F_loc[1]
+                        elif "Force Z" in var_name: y_array[i] = st.F_loc[2]
+                        elif "Torque X" in var_name: y_array[i] = st.T_loc[0]
+                        elif "Torque Y" in var_name: y_array[i] = st.T_loc[1]
+                        elif "Torque Z" in var_name: y_array[i] = st.T_loc[2]
                         
             # --- Safely restore the 3D Viewport math exactly to where it was! ---
             self.solver.unpack_state(self.solver.simulation_history[current_frame])

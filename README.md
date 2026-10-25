@@ -1,7 +1,5 @@
 # SimPhant
 
-![SimPhant introduction](./icons/Intro_Picture.jpg)
-
 SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
 
 ![SimPhant demo](./icons/Demo_Video_GIF.gif)
@@ -175,6 +173,14 @@ SimPhant project states are stored as `.mbd` files. The public [Examples](./Exam
 The main application controller is located in `main.py`. Supporting modules contain the rigid-body model, mathematical kernels, solver, integrators, geometry generators, forces, joints, springs, contacts, gears, project management, and telemetry functionality.
 
 The Qt Designer source is `main_window.ui`. The generated `ui_main_window.py` file should be regenerated from the `.ui` file when the interface changes.
+
+Run the contact geometry and solver regressions from the repository root:
+
+```bash
+python -m unittest discover -s tests -p test_contact_regions.py -v
+```
+
+These include mesh-refinement invariance, separate regions, crossing edges, picometer-scale overlaps, annular and torus contacts, force/moment balance, damping, bounded trial recovery, and a tightly integrated ball-impact check of peak force, impulse, energy, and deferred telemetry. The complete saved Newton's Cradle (3 s) and tilted-torus (0.5 s) models are also solved and postprocessed. Tests read the example archives without modifying them.
 
 ## Documentation
 

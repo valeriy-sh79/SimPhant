@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: unit_springs.py
 #  Description:
 #      Defines compliant physical connections, including 1D compression/torsion springs 
@@ -27,9 +27,11 @@
 # =============================================================================
 
 import re
+from dataclasses import dataclass
 
 import numpy as np
 import pyvista as pv
+from scipy.spatial.transform import Rotation
 
 # ==========================================
 # SAFE MATH COMPILER ENVIRONMENT (shared with Force / JointMotion expressions)
@@ -426,8 +428,40 @@ class TorsionSpring(BaseSpring):
             act.user_matrix = mat
             act.SetVisibility(True)
             
+def _rotation_vector(R):
+    """ Rotation vector (axis * angle, rad) of a 3x3 rotation matrix. Closed form, accurate for small angles. """
+    v = 0.5 * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])   # sin(angle) * axis
+    s = np.linalg.norm(v)
+    c = 0.5 * (np.trace(R) - 1.0)                                                  # cos(angle)
+    if s < 1e-12:
+        return v if c > 0.0 else Rotation.from_matrix(R).as_rotvec()
+    if c > -0.999:
+        return v * (np.arctan2(s, c) / s)
+    return Rotation.from_matrix(R).as_rotvec()    # Close to 180 deg the closed form loses the axis
+
+
+@dataclass
+class BushingState:
+    """ Instantaneous bushing kinematics and loads. All SI. 'loc' = components along the RF_I axes. """
+    u: np.ndarray        # Translational deformation of the J anchor relative to RF_I (loc)
+    phi: np.ndarray      # Rotational deformation: rotation vector of the J anchor relative to RF_I (loc)
+    u_dot: np.ndarray    # Rate of u (loc)
+    w_rel: np.ndarray    # Angular velocity of Body J relative to RF_I (loc)
+    F_loc: np.ndarray    # Bushing force acting on Body J (loc)
+    T_loc: np.ndarray    # Bushing torque acting on Body J (loc)
+    F_i: np.ndarray      # Generalized load on Body I: global force ...
+    M_i: np.ndarray      # ... and torque about its CoG in its principal (local) axes
+    F_j: np.ndarray      # Generalized load on Body J: global force ...
+    M_j: np.ndarray      # ... and torque about its CoG in its principal (local) axes
+
+
 class Bushing(BaseSpring):
-    """ 6-DOF Compliant Spring-Damper (Bushing) between two Reference Frames. """
+    """ 6-DOF Compliant Spring-Damper (Bushing) between two Reference Frames.
+
+    RF_I defines the bushing frame: the axes along which stiffness, damping and preload act. The frame is
+    fixed to Body I, so it moves and rotates with it. RF_J only defines the anchor of Body J (position and
+    orientation); when it is empty the anchor coincides with RF_I. The bushing is force-free (apart from
+    the preload) in the pose of the model at t=0: deformations are measured from that pose. """
     def __init__(self, name, body_i, rf_i_name, body_j, rf_j_name, plotter):
         super().__init__(name, body_i, rf_i_name, body_j, rf_j_name, plotter)
         
@@ -442,9 +476,13 @@ class Bushing(BaseSpring):
         self.c_rot = np.zeros(3)
         self.p_rot = np.zeros(3)
         
-        # Phase 2 prep: Will store the initial baseline geometry at t=0
-        self.initial_local_pos_j = np.zeros(3)
-        self.initial_rel_rot = np.eye(3)
+        # Orientation of RF_I / the J anchor expressed in the principal axes of Body I / Body J
+        self.local_rot_i = np.eye(3)
+        self.local_rot_j = np.eye(3)
+        
+        # Pose of the J anchor relative to RF_I at t=0 (the force-free reference), see capture_baseline()
+        self.ref_pos = np.zeros(3)
+        self.ref_rot = np.eye(3)
         
         # Visual Parameters
         self.native_color = 'purple'
@@ -506,22 +544,75 @@ class Bushing(BaseSpring):
     def bind_kinematics(self, rframes_list):
         """ 
         Strict 6-DOF Kinematics: The Bushing's X, Y, and Z axes are perfectly 
-        locked to RF_I's orientation. Point-to-Point aiming is completely ignored.
-        NEW: We save how RF_I is rotated relative to Body I.
+        locked to RF_I's orientation (fixed to Body I). Point-to-Point aiming is ignored.
+        RF_I gives the anchor and frame on Body I, RF_J the anchor on Body J. If RF_J is empty,
+        the anchor on Body J is placed at the exact position and orientation of RF_I.
         """
         rf_i = next((rf for rf in rframes_list if rf.name == self.rf_i_name), None)
         rf_j = next((rf for rf in rframes_list if rf.name == self.rf_j_name), None)
+        A_i, A_j = self.body_i.principal_axes, self.body_j.principal_axes
 
         if rf_i:
-            self.local_pos_i = self.body_i.principal_axes.T @ (rf_i.position - self.body_i.cog)
-            
-            # --- THE UPGRADE: Save RF_I's exact local rotation matrix! ---
-            self.local_rot_i = self.body_i.principal_axes.T @ rf_i.transform_matrix
-            
-            g_axis = rf_i.transform_matrix[:, 2] 
-            self.local_axis_i = self.body_i.principal_axes.T @ g_axis
+            self.local_pos_i = A_i.T @ (rf_i.position - self.body_i.cog)
+            self.local_rot_i = A_i.T @ rf_i.transform_matrix
+            self.local_axis_i = A_i.T @ rf_i.transform_matrix[:, 2]
 
+        anchor_j = rf_j if rf_j else rf_i
+        if anchor_j:
+            self.local_pos_j = A_j.T @ (anchor_j.position - self.body_j.cog)
+            self.local_rot_j = A_j.T @ anchor_j.transform_matrix
+
+    def restore_local_rot_j(self, rframes_list):
+        """ Project files saved before the J anchor orientation existed: rebuild it from RF_J (or from RF_I). """
+        rf_j = next((rf for rf in rframes_list if rf.name == self.rf_j_name), None)
+        A_j = self.body_j.principal_axes
         if rf_j:
-            self.local_pos_j = self.body_j.principal_axes.T @ (rf_j.position - self.body_j.cog)
-        elif rf_i:
-            self.local_pos_j = self.body_j.principal_axes.T @ (rf_i.position - self.body_j.cog)       
+            self.local_rot_j = A_j.T @ rf_j.transform_matrix
+        else:
+            self.local_rot_j = A_j.T @ (self.body_i.principal_axes @ self.local_rot_i)
+
+    def capture_baseline(self):
+        """ Stores the pose of the J anchor relative to RF_I in the current (t=0) configuration. """
+        A_i, A_j = self.body_i.principal_axes, self.body_j.principal_axes
+        E = A_i @ self.local_rot_i
+        p_i = self.body_i.cog + A_i @ self.local_pos_i
+        p_j = self.body_j.cog + A_j @ self.local_pos_j
+        self.ref_pos = E.T @ (p_j - p_i)
+        self.ref_rot = E.T @ A_j
+
+    def evaluate(self):
+        """ Single source of truth for the bushing physics: deformation, rates, wrench and the loads on both bodies.
+
+        Deformation = pose of the J anchor measured in the (moving) RF_I frame, relative to t=0. The force F
+        and torque T act on Body J (F at its anchor); Body I receives the reaction (-F at its anchor, -T) plus
+        the couple -d x F, with d the vector between the anchors, so the pair is a pure internal action:
+        linear and angular momentum are conserved and the stiffness terms derive from a potential. """
+        bi, bj = self.body_i, self.body_j
+        A_i, A_j = bi.principal_axes, bj.principal_axes
+        E = A_i @ self.local_rot_i                  # RF_I axes in the global frame
+
+        r_i = A_i @ self.local_pos_i                # CoG -> anchor, global
+        r_j = A_j @ self.local_pos_j
+        d = (bj.cog + r_j) - (bi.cog + r_i)         # Anchor I -> anchor J, global
+
+        w_i = A_i @ bi.angular_velocity             # Angular velocities are stored in the local axes of each body
+        w_j = A_j @ bj.angular_velocity
+        v_pi = bi.velocity + np.cross(w_i, r_i)
+        v_pj = bj.velocity + np.cross(w_j, r_j)
+
+        # RF_I rotates with Body I, so the rate of d seen from RF_I excludes the frame rotation (w_i x d)
+        u = E.T @ d - self.ref_pos
+        u_dot = E.T @ (v_pj - v_pi - np.cross(w_i, d))
+        phi = _rotation_vector(E.T @ A_j @ self.ref_rot.T)
+        w_rel = E.T @ (w_j - w_i)
+
+        F_loc = self.p_trans - self.k_trans * u - self.c_trans * u_dot
+        T_loc = self.p_rot - self.k_rot * phi - self.c_rot * w_rel
+        F_g = E @ F_loc
+        T_g = E @ T_loc
+
+        return BushingState(
+            u=u, phi=phi, u_dot=u_dot, w_rel=w_rel, F_loc=F_loc, T_loc=T_loc,
+            F_i=-F_g, M_i=A_i.T @ (np.cross(r_i, -F_g) - T_g - np.cross(d, F_g)),
+            F_j=F_g, M_j=A_j.T @ (np.cross(r_j, F_g) + T_g),
+        )

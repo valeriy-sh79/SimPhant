@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: math_kernels.py
 #  Description:
 #      Provides optimized mathematical kernels for multibody dynamics simulations, including
@@ -234,15 +234,17 @@ def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx
 
 # @njit(nopython=True, fastmath=True) # this line was originally here but was changed to the line below to avoid the warning
 @njit(fastmath=True)
-def solve_kkt_system_numba(M, Phi_q, Q, gamma_star, epsilon):
-    """ Solves the Schur Complement. """
-    Minv_Q = np.linalg.solve(M, Q)
-    Minv_PhiT = np.linalg.solve(M, Phi_q.T)
+def solve_kkt_system_numba(M_diag, Phi_q, Q, gamma_star, epsilon):
+    """ Solves the Schur Complement. M is diagonal, so M^-1 is applied elementwise (no dense solve). """
+    m, n = Phi_q.shape
+    Minv = 1.0 / M_diag
+    Minv_Q = Q / M_diag
+    Minv_PhiT = np.ascontiguousarray(Phi_q.T * Minv.reshape((n, 1)))
     C_matrix = Phi_q @ Minv_PhiT
     RHS_lambda = Phi_q @ Minv_Q - gamma_star
     
     if epsilon > 0.0:
-        for i in range(C_matrix.shape[0]):
+        for i in range(m):
             C_matrix[i, i] += epsilon
             
     lambdas = np.linalg.solve(C_matrix, RHS_lambda)
@@ -413,11 +415,11 @@ def warm_up_numba_kernels():
         True,
     )
 
-    M = np.eye(2, dtype=np.float64)
+    M_diag = np.ones(2, dtype=np.float64)
     Phi_q = np.array([[1.0, 0.0]], dtype=np.float64)
     Q = np.zeros(2, dtype=np.float64)
     gamma_star = np.zeros(1, dtype=np.float64)
-    solve_kkt_system_numba(M, Phi_q, Q, gamma_star, 1e-7)
+    solve_kkt_system_numba(M_diag, Phi_q, Q, gamma_star, 1e-7)
 
     contact_Q = np.zeros(12, dtype=np.float64)
     apply_contact_manifold_numba(
