@@ -12,6 +12,8 @@ ___Obsolete/
 !Examples/
 !Examples/*.mbd
 !Examples/**/*.mbd
+*.pdf
+test/
 
 # Python bytecode & cache
 __pycache__/

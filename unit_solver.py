@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
@@ -27,7 +27,6 @@
 # =============================================================================
 
 import numpy as np
-import scipy.linalg
 import os
 import csv
 import logging
@@ -38,6 +37,7 @@ from integrators import CustomRK4, SciPyIntegrator
 from scipy.spatial.transform import Rotation
 from unit_forces import ForceType
 from unit_joints import JointType, GearType
+from unit_collision import RegionContactGeometry, empty_contact_manifold, ContactResolutionError
 
 # By default, SciPy formats quaternions as [x, y, z, w] (scalar last).
 # We will strictly follow this convention to avoid mathematical bugs.
@@ -72,10 +72,6 @@ class MBSolver:
         # velocity-level drift back as a Baumgarte correction, so a transient disturbance
         # (e.g. a stiff contact impact on a gear-coupled body) decays instead of persisting.
         self.gear_baumgarte_enabled = False # Deactivated by default since increases twice the simulation time
-        # Symmetric search and candidate reduction are per-ContactPair properties now;
-        # these are just the shared tuning constants for the reduction voxel grid.
-        self.contact_candidate_reduction_threshold = 96
-        self.contact_candidate_voxel_size_m = 1e-3
         
         # 1. Filter out the ground AND disabled bodies. 
         self.moving_bodies = [b for b in physics_bodies.values() if not b.is_ground and b.enabled]
@@ -89,14 +85,11 @@ class MBSolver:
         self.N_vel = self.num_bodies * 6 # [Vx, Vy, Vz, Wx_local, Wy_local, Wz_local]
         self.N_total = self.N_pos + self.N_vel
 
-        # 4. PRE-COMPUTE THE CONSTANT MASS MATRIX
-        self.M_constant = self.build_constant_mass_matrix()
+        # 4. PRE-COMPUTE THE CONSTANT (DIAGONAL) MASS MATRIX
+        # M is diagonal, so it is stored as a vector: M^-1 * x is an elementwise division (no inverse, no LU).
+        self.M_diag = self.build_mass_diagonal()
         
-        # 5. Pre-factorize the Mass Matrix for extreme solving speed
-        # (lu, piv) stores the factorized data so we never have to invert M during the loop!
-        self.lu_M = scipy.linalg.lu_factor(self.M_constant)
-        
-        # 6. Pre-Count Constraints to size the Jacobian Matrix & Reaction Forces
+        # 5. Pre-Count Constraints to size the Jacobian Matrix & Reaction Forces
         self.num_equations = 0
         for joint in self.joints_list:
             if not joint.enabled: continue
@@ -127,8 +120,7 @@ class MBSolver:
             'active_contact_pairs_total': 0,
             'active_contact_pairs_peak': 0,
             'contact_points_total': 0,
-            'candidate_vertices_total': 0,
-            'candidate_vertices_reduced_total': 0,
+            'region_intersections': 0,
         }
 
     def _get_solver_profile(self):
@@ -148,9 +140,8 @@ class MBSolver:
             f"  Narrow-phase time: {profile['narrowphase_time']:.3f} s\n"
             f"  Active contact pairs processed (total / peak per RHS): "
             f"{profile['active_contact_pairs_total']} / {profile['active_contact_pairs_peak']}\n"
-            f"  Candidate vertices queried (raw / reduced): "
-            f"{profile['candidate_vertices_total']} / {profile['candidate_vertices_reduced_total']}\n"
-            f"  Total contact points processed: {profile['contact_points_total']}\n"
+            f"  Region intersection queries: {profile['region_intersections']}\n"
+            f"  Total contact regions processed: {profile['contact_points_total']}\n"
             f"  Post-processing time: {post_processing_time:.3f} s"
         )
         logging.info(summary)
@@ -213,6 +204,17 @@ class MBSolver:
         if getattr(self, 'simulation_history', None) is None:
             raise RuntimeError("No simulation history is available for post-processing.")
 
+        # Spring rest length/angle, bushing reference pose and motion offsets are defined by the t=0 configuration,
+        # not by the pose the bodies currently have (after playback, or when the results come from a project file).
+        if not getattr(self, '_baselines_ready', False):
+            self.unpack_state(self.simulation_history[0])
+            if getattr(self, 'diagnostics_ready', False):
+                self.initialize_springs()
+                self.initialize_motions()
+            else:
+                self.prepare_runtime_evaluation_state()
+            self._baselines_ready = True
+
         if getattr(self, 'diagnostics_ready', False):
             return 0.0
 
@@ -224,17 +226,15 @@ class MBSolver:
             raise RuntimeError("Time history is unavailable. Provide dt to extract telemetry on demand.")
 
         print("Preparing telemetry histories on demand...")
-        self.prepare_runtime_evaluation_state()
         elapsed = self._extract_result_diagnostics(time_history)
         logging.info(f"Deferred post-processing complete in {elapsed:.3f} s")
         return elapsed
 
     def _build_collision_cache(self, body, mode):
-        """Builds the requested collision mesh once and stores meter-space vertices for the hot path."""
+        """Builds the selected closed solid and its region-query cache once per solve."""
         import trimesh
 
         mesh_attr = f'collision_mesh_mode_{mode}'
-        verts_m_attr = f'collision_vertices_m_mode_{mode}'
 
         if mode == 3:
             collision_mesh = body.raw_geom.convex_hull
@@ -254,14 +254,13 @@ class MBSolver:
 
             collision_mesh = trimesh.Trimesh(vertices=verts, faces=faces)
 
+        geometry = RegionContactGeometry(collision_mesh, body.name)
         setattr(body, mesh_attr, collision_mesh)
-        setattr(body, verts_m_attr, np.asarray(collision_mesh.vertices, dtype=np.float64) * 0.001)
+        setattr(body, f'collision_regions_mode_{mode}', geometry)
 
     def _get_collision_cache(self, body, mode):
-        """Returns the prebuilt collision mesh and its cached meter-space vertices."""
-        mesh_attr = f'collision_mesh_mode_{mode}'
-        verts_m_attr = f'collision_vertices_m_mode_{mode}'
-        return getattr(body, mesh_attr), getattr(body, verts_m_attr)
+        """Returns immutable local geometry for region contact evaluation."""
+        return getattr(body, f'collision_regions_mode_{mode}')
 
     def prepare_contact_collision_meshes(self):
         """Prebuilds collision caches for all enabled contact pairs before integration starts."""
@@ -278,29 +277,6 @@ class MBSolver:
                     continue
                 self._build_collision_cache(body, mode)
                 prepared.add(key)
-
-    def _reduce_contact_candidates(self, points_glob_m, target_local_points_m, reduction_enabled=True):
-        """Deduplicates dense candidate vertices in small target-local voxels before proximity queries."""
-        if not reduction_enabled:
-            return points_glob_m, target_local_points_m
-
-        threshold = int(getattr(self, 'contact_candidate_reduction_threshold', 96))
-        if len(points_glob_m) <= threshold:
-            return points_glob_m, target_local_points_m
-
-        voxel_size = float(getattr(self, 'contact_candidate_voxel_size_m', 1e-4))
-        if voxel_size <= 0.0:
-            return points_glob_m, target_local_points_m
-
-        origin = np.min(target_local_points_m, axis=0)
-        voxel_keys = np.floor((target_local_points_m - origin) / voxel_size).astype(np.int64)
-        _, unique_indices = np.unique(voxel_keys, axis=0, return_index=True)
-
-        if len(unique_indices) == len(points_glob_m):
-            return points_glob_m, target_local_points_m
-
-        unique_indices = np.sort(unique_indices)
-        return points_glob_m[unique_indices], target_local_points_m[unique_indices]
 
     def prepare_runtime_evaluation_state(self):
         """Builds the derived arrays and caches that evaluate_derivatives expects."""
@@ -483,15 +459,7 @@ class MBSolver:
              
             # --- Capture Bushing Baseline ---
             elif hasattr(spring, 'k_trans'): # Bushing
-                # Calculate current global attachment points
-                p_i = spring.body_i.cog + spring.body_i.principal_axes @ spring.local_pos_i
-                p_j = spring.body_j.cog + spring.body_j.principal_axes @ spring.local_pos_j
-                
-                # Store J's position relative to I, strictly in I's local coordinate system!
-                spring.initial_local_pos_j = spring.body_i.principal_axes.T @ (p_j - p_i)
-                
-                # Store the rotation matrix of J relative to I
-                spring.initial_rel_rot = spring.body_i.principal_axes.T @ spring.body_j.principal_axes 
+                spring.capture_baseline()
     
     def initialize_motions(self):
         """ Calculates the t=0 resting lengths and angles for kinematic drivers. """
@@ -522,21 +490,20 @@ class MBSolver:
                 
                 motion.initial_dist = np.dot(d, v_glob_i)
                     
-    def build_constant_mass_matrix(self):
-        """ Assembles the constant 6N x 6N Mass Matrix (Evaluated ONCE). """
-        M = np.zeros((self.N_vel, self.N_vel))
+    def build_mass_diagonal(self):
+        """ Diagonal of the constant 6N x 6N Mass Matrix: [m, m, m, Jxx, Jyy, Jzz] per body (Evaluated ONCE). """
+        M_diag = np.zeros(self.N_vel)
         
         for idx, body in enumerate(self.moving_bodies):
             row_start = idx * 6
             
             # 1. Translational Mass (Global)
-            M[row_start:row_start+3, row_start:row_start+3] = np.eye(3) * body.mass
+            M_diag[row_start:row_start+3] = body.mass
             
             # 2. Rotational Inertia (Local - STRICTLY CONSTANT)
-            I_local = np.diag(body.principal_inertia)
-            M[row_start+3:row_start+6, row_start+3:row_start+6] = I_local
+            M_diag[row_start+3:row_start+6] = body.principal_inertia
             
-        return M
+        return M_diag
 
     def build_force_vector(self, t):
         """ Assembles the 6N x 1 Force Vector (Global F, Local T) incl.Actuators """
@@ -809,63 +776,13 @@ class MBSolver:
                     
             # --- Core Bushing Physics ---
             elif hasattr(spring, 'k_trans'): 
-                A_i, A_j = spring.body_i.principal_axes, spring.body_j.principal_axes
-                
-                # --- THE UPGRADE: Calculate the Global Rotation of RF_I ---
-                R_rf_i = A_i @ spring.local_rot_i
-                
-                r_i_glob = A_i @ spring.local_pos_i
-                r_j_glob = A_j @ spring.local_pos_j
-                p_i = spring.body_i.cog + r_i_glob
-                p_j = spring.body_j.cog + r_j_glob
-                
-                w_i_glob = A_i @ spring.body_i.angular_velocity
-                w_j_glob = A_j @ spring.body_j.angular_velocity
-                v_i_glob = spring.body_i.velocity + np.cross(w_i_glob, r_i_glob)
-                v_j_glob = spring.body_j.velocity + np.cross(w_j_glob, r_j_glob)
-                
-                # 1. Translational Kinematics (Projected perfectly into RF_I's rotated frame!)
-                current_local_pos_j = R_rf_i.T @ (p_j - p_i)
-                delta_x = current_local_pos_j - spring.initial_local_pos_j
-                v_rel_loc = R_rf_i.T @ (v_j_glob - v_i_glob)
-                
-                # 2. Rotational Kinematics (Extracting the delta Euler angles in RF_I's frame)
-                R_rel = R_rf_i.T @ A_j
-                R_delta = R_rel @ spring.initial_rel_rot.T
-                
-                # Safely extract the rotation vector (axis * angle) from the matrix
-                angle = np.arccos(np.clip((np.trace(R_delta) - 1.0) / 2.0, -1.0, 1.0))
-                if angle > 1e-8:
-                    axis = np.array([R_delta[2,1]-R_delta[1,2], R_delta[0,2]-R_delta[2,0], R_delta[1,0]-R_delta[0,1]])
-                    norm_axis = np.linalg.norm(axis)
-                    delta_theta = (axis / norm_axis) * angle if norm_axis > 1e-8 else np.zeros(3)
-                else:
-                    delta_theta = np.zeros(3)
-                    
-                w_rel_loc = A_i.T @ (w_j_glob - w_i_glob)
-                
-                # 3. Calculate 6-DOF Local Forces & Torques (Generated strictly at RF_I)
-                F_calc_loc = -(spring.k_trans * delta_x) - (spring.c_trans * v_rel_loc) + spring.p_trans
-                T_calc_loc = -(spring.k_rot * delta_theta) - (spring.c_rot * w_rel_loc) + spring.p_rot
-                
-                F_calc_glob = R_rf_i @ F_calc_loc
-                T_calc_glob = R_rf_i @ T_calc_loc
-                
-                # 4. Action-Reaction (Applying the stiffness strictly at p_i)
-                # Body I feels the raw reaction forces exactly at p_i
-                F_i_glob = -F_calc_glob
-                T_i_glob = -T_calc_glob
-                
-                # Body J feels the forces shifted from p_i to p_j via the Parallel Axis Theorem!
-                F_j_glob = F_calc_glob
-                T_j_glob = T_calc_glob - np.cross(p_j - p_i, F_calc_glob)
-                
+                load = spring.evaluate()
                 if row_i is not None:
-                    Q[row_i : row_i+3] += F_i_glob
-                    Q[row_i+3 : row_i+6] += A_i.T @ (np.cross(r_i_glob, F_i_glob) + T_i_glob)
+                    Q[row_i : row_i+3] += load.F_i
+                    Q[row_i+3 : row_i+6] += load.M_i
                 if row_j is not None:
-                    Q[row_j : row_j+3] += F_j_glob
-                    Q[row_j+3 : row_j+6] += A_j.T @ (np.cross(r_j_glob, F_j_glob) + T_j_glob)
+                    Q[row_j : row_j+3] += load.F_j
+                    Q[row_j+3 : row_j+6] += load.M_j
                     
         return Q
 
@@ -982,7 +899,7 @@ class MBSolver:
                     max_depth = max(max_depth, float(np.max(depths_i_j)))
                 if len(depths_j_i) > 0:
                     max_depth = max(max_depth, float(np.max(depths_j_i)))
-                print(f"[{t:.3f}s] NARROW PHASE: {contact_point_count} points between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth * 1000.0:.2f} mm)")
+                print(f"[{t:.3f}s] NARROW PHASE: {contact_point_count} regions between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth * 1000.0:.2f} mm)")
                 self.last_collision_print_time = t
         # ==========================================
 
@@ -1114,10 +1031,10 @@ class MBSolver:
             # 5. SOLVE KKT SYSTEM
             # ==========================================
             try:
-                lambdas = solve_kkt_system_numba(self.M_constant, Phi_q, Q, gamma_star, self.epsilon)
+                lambdas = solve_kkt_system_numba(self.M_diag, Phi_q, Q, gamma_star, self.epsilon)
             except np.linalg.LinAlgError:
-                Minv_Q = scipy.linalg.lu_solve(self.lu_M, Q)
-                Minv_PhiT = scipy.linalg.lu_solve(self.lu_M, Phi_q.T)
+                Minv_Q = Q / self.M_diag
+                Minv_PhiT = Phi_q.T * (1.0 / self.M_diag)[:, None]
                 C_matrix = Phi_q @ Minv_PhiT
                 RHS_lambda = Phi_q @ Minv_Q - gamma_star
                 lambdas, _, _, _ = np.linalg.lstsq(C_matrix, RHS_lambda, rcond=None)
@@ -1143,12 +1060,12 @@ class MBSolver:
             
             constraint_forces = Phi_q.T @ lambdas
             RHS_accel = Q - constraint_forces
-            accelerations = scipy.linalg.lu_solve(self.lu_M, RHS_accel)
+            accelerations = RHS_accel / self.M_diag
             
         else:
             self.current_lambdas = np.zeros(0)
             self.current_gear_lambdas = np.zeros(0)
-            accelerations = scipy.linalg.lu_solve(self.lu_M, Q)
+            accelerations = Q / self.M_diag
             
         if not np.all(np.isfinite(accelerations)):
             self._log_divergence_diagnostics(t, Q, accelerations)
@@ -1229,6 +1146,7 @@ class MBSolver:
 
         # --- Build the derived arrays/caches that evaluate_derivatives expects ---
         self.prepare_runtime_evaluation_state()
+        self._baselines_ready = True
         
         # ==========================================
         # PHASE 1: THE INTEGRATION (CRUNCHING THE ODE)
@@ -1555,49 +1473,14 @@ class MBSolver:
                                     fmt(T_def), fmt(T_damp), fmt(T_res)
                                 ])
                             
-                        # --- Bushing CSV Telemetry ---
-                        # --- ADD THIS: Bushing CSV Telemetry (Orientation Upgraded) ---
+                        # --- Bushing CSV Telemetry (same evaluation as the solver) ---
                         elif hasattr(spring, 'k_trans'): 
-                            A_i, A_j = spring.body_i.principal_axes, spring.body_j.principal_axes
-                            
-                            # --- THE UPGRADE: Calculate the Global Rotation of RF_I ---
-                            R_rf_i = A_i @ spring.local_rot_i
-                            
-                            w_i_glob = A_i @ spring.body_i.angular_velocity
-                            w_j_glob = A_j @ spring.body_j.angular_velocity
-                            v_i_glob = spring.body_i.velocity + np.cross(w_i_glob, A_i @ spring.local_pos_i)
-                            v_j_glob = spring.body_j.velocity + np.cross(w_j_glob, A_j @ spring.local_pos_j)
-                            
-                            p_i = spring.body_i.cog + A_i @ spring.local_pos_i
-                            p_j = spring.body_j.cog + A_j @ spring.local_pos_j
-                            
-                            # 1. Project translations into RF_I's rotated frame!
-                            delta_x = (R_rf_i.T @ (p_j - p_i)) - spring.initial_local_pos_j
-                            v_rel_loc = R_rf_i.T @ (v_j_glob - v_i_glob)
-                            
-                            # 2. Extract delta Euler angles in RF_I's rotated frame!
-                            R_rel = R_rf_i.T @ A_j
-                            R_delta = R_rel @ spring.initial_rel_rot.T
-                            
-                            angle = np.arccos(np.clip((np.trace(R_delta) - 1.0) / 2.0, -1.0, 1.0))
-                            if angle > 1e-8:
-                                axis = np.array([R_delta[2,1]-R_delta[1,2], R_delta[0,2]-R_delta[2,0], R_delta[1,0]-R_delta[0,1]])
-                                norm_axis = np.linalg.norm(axis)
-                                delta_theta = (axis / norm_axis) * angle if norm_axis > 1e-8 else np.zeros(3)
-                            else:
-                                delta_theta = np.zeros(3)
-                                
-                            w_rel_loc = R_rf_i.T @ (w_j_glob - w_i_glob)
-                            
-                            # 3. Recalculate local forces/torques using the corrected orientations
-                            F_calc_loc = -(spring.k_trans * delta_x) - (spring.c_trans * v_rel_loc) + spring.p_trans
-                            T_calc_loc = -(spring.k_rot * delta_theta) - (spring.c_rot * w_rel_loc) + spring.p_rot
-                            
+                            st = spring.evaluate()
                             row_data.extend([
-                                fmt(delta_x[0]), fmt(delta_x[1]), fmt(delta_x[2]),
-                                fmt(delta_theta[0]), fmt(delta_theta[1]), fmt(delta_theta[2]),
-                                fmt(F_calc_loc[0]), fmt(F_calc_loc[1]), fmt(F_calc_loc[2]),
-                                fmt(T_calc_loc[0]), fmt(T_calc_loc[1]), fmt(T_calc_loc[2])
+                                fmt(st.u[0]), fmt(st.u[1]), fmt(st.u[2]),
+                                fmt(st.phi[0]), fmt(st.phi[1]), fmt(st.phi[2]),
+                                fmt(st.F_loc[0]), fmt(st.F_loc[1]), fmt(st.F_loc[2]),
+                                fmt(st.T_loc[0]), fmt(st.T_loc[1]), fmt(st.T_loc[2])
                             ]) 
 
                     # D. Add the Reaction Forces (Joint Lambdas)    
@@ -1827,73 +1710,18 @@ class MBSolver:
         return active_contacts    
     
     def evaluate_narrow_phase(self, cp):
-        """ Narrow Phase: Vertex-to-Mesh Proximity Check with dynamic simplification modes. """
+        """Evaluate each disconnected solid overlap once, independent of vertex count."""
         body_a, body_b = cp.body_i, cp.body_j
         mesh_mode = getattr(cp, 'mesh_mode', 0)
-        symmetric_contact_search = getattr(cp, 'symmetric_contact_search', True)
-        reduction_enabled = getattr(cp, 'contact_candidate_reduction_enabled', True)
-        empty_manifold = (
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0, 3), dtype=np.float64),
-            np.empty(0, dtype=np.float64),
-        )
-        profile = self._get_solver_profile()
-
-        min_a, max_a = body_a.get_global_aabb()
-        min_b, max_b = body_b.get_global_aabb()
-        overlap_min = np.maximum(min_a, min_b) - 0.001 
-        overlap_max = np.minimum(max_a, max_b) + 0.001
-
-        def get_penetrations(penetrator, target):
-            # Extract the user's chosen mesh complexity
-            _, local_verts_m = self._get_collision_cache(penetrator, mesh_mode)
-            tar_mesh, _ = self._get_collision_cache(target, mesh_mode)
-
-            global_verts_m = (penetrator.principal_axes @ local_verts_m.T).T + penetrator.cog
-            
-            in_box = np.all((global_verts_m >= overlap_min) & (global_verts_m <= overlap_max), axis=1)
-            candidate_verts_m = global_verts_m[in_box]
-            
-            if len(candidate_verts_m) == 0: 
-                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
-
-            profile['candidate_vertices_total'] += len(candidate_verts_m)
-
-            target_local_candidates_m = (target.principal_axes.T @ (candidate_verts_m - target.cog).T).T
-            candidate_verts_m, target_local_candidates_m = self._reduce_contact_candidates(candidate_verts_m, target_local_candidates_m, reduction_enabled)
-            profile['candidate_vertices_reduced_total'] += len(candidate_verts_m)
-            target_local_candidates_mm = target_local_candidates_m * 1000.0
-            
-            try:
-                closest_pts_mm, distances_mm, tri_ids = tar_mesh.nearest.on_surface(target_local_candidates_mm)
-            except Exception as e:
-                print(f"  -> ERROR: Trimesh proximity crashed! {e}")
-                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
-
-            local_normals = tar_mesh.face_normals[tri_ids]
-            vec_to_vertices = target_local_candidates_mm - closest_pts_mm
-            dot_products = np.einsum('ij,ij->i', vec_to_vertices, local_normals)
-            depths_m = distances_mm * 0.001
-            # Light bodies on stiff contacts can balance their weight with sub-micron penetrations,
-            # especially when the load is distributed across many contact points.
-            valid_mask = (dot_products < -1e-5) & (depths_m >= 1e-7)
-
-            if not np.any(valid_mask):
-                return np.empty((0, 3)), np.empty((0, 3)), np.empty(0)
-
-            valid_points = candidate_verts_m[valid_mask]
-            valid_normals = (target.principal_axes @ local_normals[valid_mask].T).T
-            valid_depths = depths_m[valid_mask]
-
-            return valid_points, valid_normals, valid_depths
-
-        if symmetric_contact_search:
-            return get_penetrations(body_a, body_b), get_penetrations(body_b, body_a)
-
-        _, verts_a_m = self._get_collision_cache(body_a, mesh_mode)
-        _, verts_b_m = self._get_collision_cache(body_b, mesh_mode)
-
-        if verts_a_m.shape[0] <= verts_b_m.shape[0]:
-            return get_penetrations(body_a, body_b), empty_manifold
-
-        return empty_manifold, get_penetrations(body_b, body_a)
+        geometry_a = self._get_collision_cache(body_a, mesh_mode)
+        geometry_b = self._get_collision_cache(body_b, mesh_mode)
+        self._get_solver_profile()['region_intersections'] += 1
+        try:
+            manifold = geometry_a.contact_regions(
+                geometry_b, body_a.principal_axes, body_a.cog,
+                body_b.principal_axes, body_b.cog)
+        except ContactResolutionError as exc:
+            raise ContactResolutionError(f"Contact '{cp.name}': {exc}") from exc
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError(f"Contact '{cp.name}': {exc}") from exc
+        return manifold, empty_contact_manifold()

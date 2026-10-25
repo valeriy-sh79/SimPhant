@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: unit_project.py
 #  Description:
 #      Handles saving and loading the complete MBD simulation state, including exporting meshes and project data.
@@ -190,7 +190,8 @@ class ProjectManager:
                 "local_pos_i": bushing.local_pos_i.tolist(),
                 "local_pos_j": bushing.local_pos_j.tolist(),
                 "local_axis_i": bushing.local_axis_i.tolist(),
-                "local_rot_i": getattr(bushing, 'local_rot_i', np.eye(3)).tolist() # Bushing specific!
+                "local_rot_i": bushing.local_rot_i.tolist(),
+                "local_rot_j": bushing.local_rot_j.tolist()
             })
 
         # --- 7. Save Contacts ---
@@ -566,6 +567,10 @@ class ProjectManager:
             bushing.local_pos_j = np.array(b_data.get("local_pos_j", [0,0,0]))
             bushing.local_axis_i = np.array(b_data.get("local_axis_i", [0,0,1]))
             bushing.local_rot_i = np.array(b_data.get("local_rot_i", np.eye(3).tolist()))
+            if "local_rot_j" in b_data:
+                bushing.local_rot_j = np.array(b_data["local_rot_j"])
+            else:
+                bushing.restore_local_rot_j(app.rframes)   # Older project files do not store it
             
             app.bushings_list.append(bushing)
             QTreeWidgetItem(getattr(app, 'node_bushings', app.node_springs), [bushing.name])

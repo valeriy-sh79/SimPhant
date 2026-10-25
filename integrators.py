@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  Version: 2026.10.2
 #  Module: integrators.py
 #  Description:
 #     Implements various numerical integration strategies for solving the equations of motion 
@@ -29,8 +29,9 @@
 # =============================================================================
 
 import numpy as np
-from scipy.integrate import solve_ivp
+from scipy.integrate import solve_ivp, RK23, RK45, DOP853, Radau, BDF, LSODA
 import logging
+from unit_collision import ContactResolutionError
 
 class IntegratorStrategy:
     """ Base class for all numerical integrators """
@@ -122,10 +123,14 @@ class CustomSymplecticEuler(IntegratorStrategy):
     Semi-Implicit Euler. Evaluates acceleration to step Velocity first, 
     then uses the NEW velocity to step Position. Excellent energy conservation.
     """
+    def __init__(self, n_pos):
+        # Y = [positions (7 per body) | velocities (6 per body)], so the split is not len(Y) // 2.
+        self.n_pos = n_pos
+
     def solve(self, dynamics_func, t_span, Y0, t_eval, progress_callback=None):
         num_steps = len(t_eval)
         num_states = len(Y0)
-        half_idx = num_states // 2  # Split states into [Positions, Velocities]
+        half_idx = self.n_pos  # Split states into [Positions, Velocities]
         
         Y_history = np.zeros((num_steps, num_states))
         Y_history[0] = Y0
@@ -175,6 +180,69 @@ class SciPyIntegrator(IntegratorStrategy):
         self.atol = atol
         self.max_step = max_step
 
+    def _solve_contact_steps(self, dynamics_func, t_span, initial_state, sample_times):
+        methods = {'RK23': RK23, 'RK45': RK45, 'DOP853': DOP853,
+                   'Radau': Radau, 'BDF': BDF, 'LSODA': LSODA}
+        solver_type = methods[self.method]
+        start, end = t_span
+        accepted_time = start
+        accepted_state = np.asarray(initial_state).copy()
+        step_limit = self.max_step
+        retries = 0
+        self.contact_retries = 0
+        last_rhs_time = start
+        engine = None
+        first_step = None
+        history = np.empty((len(sample_times), len(initial_state)))
+        sample_index = 0
+        while sample_index < len(sample_times) and sample_times[sample_index] == start:
+            history[sample_index] = accepted_state
+            sample_index += 1
+
+        def evaluate(time, state):
+            nonlocal last_rhs_time
+            last_rhs_time = time
+            return dynamics_func(time, state)
+
+        while accepted_time < end:
+            try:
+                if engine is None:
+                    engine = solver_type(evaluate, accepted_time, accepted_state.copy(), end,
+                                         rtol=self.rtol, atol=self.atol, max_step=step_limit,
+                                         first_step=first_step)
+                message = engine.step()
+                if engine.status == 'failed':
+                    raise RuntimeError(f"Integration failed at {engine.t:.9g} s: {message}")
+            except ContactResolutionError as exc:
+                failed_time = last_rhs_time
+                dynamics_func(accepted_time, accepted_state.copy())
+                retries += 1
+                self.contact_retries += 1
+                attempted_step = abs(failed_time - accepted_time)
+                if engine is not None:
+                    attempted_step = min(attempted_step, getattr(engine, 'h_abs', attempted_step))
+                step_limit = min(step_limit, attempted_step) * 0.5
+                minimum_step = 32 * abs(np.spacing(max(abs(accepted_time), abs(end))))
+                if retries > 12 or step_limit <= minimum_step:
+                    raise ContactResolutionError(
+                        f"Contact remains unresolved near {accepted_time:.9g} s after "
+                        f"{retries} step reductions: {exc}") from exc
+                logging.warning("Contact trial rejected at %.9g s; retry from %.9g s with max_step %.6g s: %s",
+                                failed_time, accepted_time, step_limit, exc)
+                engine = None
+                first_step = min(step_limit, end - accepted_time)
+                continue
+
+            interpolant = engine.dense_output()
+            sample_end = np.searchsorted(sample_times, engine.t, side='right')
+            if sample_end > sample_index:
+                history[sample_index:sample_end] = interpolant(sample_times[sample_index:sample_end]).T
+                sample_index = sample_end
+            accepted_time = engine.t
+            accepted_state = engine.y.copy()
+            retries = 0
+        return history
+
     def solve(self, dynamics_func, t_span, Y0, t_eval, progress_callback=None):
         import logging
         # Log the exact tolerances used for this run
@@ -204,6 +272,13 @@ class SciPyIntegrator(IntegratorStrategy):
             # Call the actual heavy physics math!
             return dynamics_func(t, y)
         
+        owner = getattr(dynamics_func, '__self__', None)
+        if getattr(owner, 'contact_pairs', None):
+            history = self._solve_contact_steps(tracked_dynamics, t_span, Y0, t_eval)
+            if progress_callback:
+                progress_callback(100)
+            return history
+
         # Pass the 'tracked_dynamics' wrapper instead of the raw dynamics_func
         # This is for UI ProgressBar update every 2%, otherwise we can call fun=dynamics_func directly in 1 single step
 

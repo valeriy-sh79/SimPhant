@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 #  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  Version: 2026.10.2
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
@@ -34,10 +34,12 @@ import trimesh
 import numpy as np
 import pyvista as pv
 import random
+import json
 
 import logging
 
 from pyvistaqt import QtInteractor
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtGui import QDesktopServices, QPainter, QPixmap, QPalette
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QMainWindow, QFileDialog, QVBoxLayout,
@@ -65,18 +67,25 @@ import unit_urdf_import
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
 APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.10.1"
+APP_VERSION = "2026.10.2"
 APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
 APP_CREDITS_URL = "https://www.linkedin.com/in/valeriy-shapovalov-9762a098/"
 APP_SOURCE_REPOSITORY_URL = "https://github.com/valeriy-sh79/SimPhant"
 APP_RELEASES_URL = "https://github.com/valeriy-sh79/SimPhant/releases"
+APP_LATEST_RELEASE_API_URL = "https://api.github.com/repos/valeriy-sh79/SimPhant/releases/latest"
 APP_ISSUES_URL = "https://github.com/valeriy-sh79/SimPhant/issues"
 APP_DOCUMENTATION_SITE_URL = "https://valeriy-sh79.github.io/simphant-docs/"
 APP_DOCUMENTATION_REPOSITORY_URL = "https://github.com/valeriy-sh79/simphant-docs"
 APP_VIDEO_USER_GUIDE_URL = "https://youtu.be/UmAx7vWeA8s"
 APP_VIDEO_USER_GUIDE_RU_URL = "https://youtu.be/YOSsoQnl2pM?si=IbnJsYosDNky-SW4"
+
+
+def parse_version_tuple(version_text):
+    """Converts 'v2026.10.1' or '2026.10.1' into (2026, 10, 1); returns None if it has no numbers."""
+    parts = re.findall(r'\d+', str(version_text).split('-')[0])
+    return tuple(int(p) for p in parts) if parts else None
 
 
 def get_app_base_dir():
@@ -288,6 +297,8 @@ class PhysicsEngineMain(QMainWindow):
         
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self.ui.chkSymmetricContact.hide()
+        self.ui.chkCandidateReduction.hide()
         self.setWindowTitle(APP_MAIN_WINDOW_TITLE)
 
         # Configure dock widget corner ownership so dckProperties reaches the bottom
@@ -318,6 +329,12 @@ class PhysicsEngineMain(QMainWindow):
         self.plotter.add_axes() #(interactive=True, line_width=4)
         # show_message=False removes the default PyVista on-screen text
         self.plotter.enable_mesh_picking(callback=self.on_mesh_picked, show=False, left_clicking=True, show_message=False)
+        # Shift+click selects Reference Frames instead of Bodies
+        self._rf_pick_start = None
+        self._rf_cycle_pos = None
+        QApplication.instance().installEventFilter(self)  # Shift key -> pointing-hand cursor
+        self.plotter.iren.add_observer("LeftButtonPressEvent", self._on_viewport_left_press)
+        self.plotter.iren.add_observer("LeftButtonReleaseEvent", self._on_viewport_left_release)
         
         # Build Top-Level Tree Nodes
         self.ui.treeHierarchy.setHeaderLabel("Project Explorer")
@@ -355,6 +372,8 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.actionExit.triggered.connect(self.close)
         if hasattr(self.ui, 'actionAbout_SimPhant'):
             self.ui.actionAbout_SimPhant.triggered.connect(self.show_about_dialog)
+        if hasattr(self.ui, 'actionCheck_for_updates'):
+            self.ui.actionCheck_for_updates.triggered.connect(self.check_for_updates)
         if hasattr(self.ui, 'actionDocumentation'):
             self.ui.actionDocumentation.triggered.connect(self.open_documentation)
         if hasattr(self.ui, 'actionShowTraceback'):
@@ -593,9 +612,6 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.btnBushing.clicked.connect(self.prepare_new_bushing) 
         self.ui.btnRenameBushing.clicked.connect(self.rename_bushing)
         self.ui.chkEnabledBushing.toggled.connect(self.toggle_bushing_enabled)
-        
-        self.ui.lbl_Bushing_RFBodyJ.hide() # Hide the label for now, unless Bushing with 2 RFs is properly tested
-        self.ui.Edit_RFBodyJ_Bushing.hide() # Hide the input field for now, unless Bushing with 2 RFs is properly tested
 
         # --- Viewport State Trackers ---
         self.edges_visible = False
@@ -1114,6 +1130,72 @@ class PhysicsEngineMain(QMainWindow):
         layout.addWidget(close_button, alignment=Qt.AlignCenter)
 
         dialog.exec()
+
+    def check_for_updates(self):
+        """Asks the GitHub Releases API for the latest SimPhant version without blocking the UI."""
+        if getattr(self, '_update_reply', None) is not None:
+            return  # A check is already running
+
+        if not hasattr(self, '_update_manager'):
+            self._update_manager = QNetworkAccessManager(self)
+
+        request = QNetworkRequest(QUrl(APP_LATEST_RELEASE_API_URL))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"User-Agent", f"{APP_NAME}/{APP_VERSION}".encode())
+        request.setTransferTimeout(10000)
+
+        self.ui.actionCheck_for_updates.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._update_reply = self._update_manager.get(request)
+        self._update_reply.finished.connect(self._on_update_check_finished)
+
+    def _on_update_check_finished(self):
+        reply, self._update_reply = self._update_reply, None
+        QApplication.restoreOverrideCursor()
+        self.ui.actionCheck_for_updates.setEnabled(True)
+
+        latest_tag, release_url, error = None, APP_RELEASES_URL, None
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            error = reply.errorString()
+        else:
+            try:
+                data = json.loads(bytes(reply.readAll()).decode('utf-8'))
+                latest_tag = data['tag_name']
+                release_url = data.get('html_url') or APP_RELEASES_URL
+            except (ValueError, KeyError, TypeError):
+                error = "Unexpected response from the SimPhant repository."
+        reply.deleteLater()
+
+        current, latest = parse_version_tuple(APP_VERSION), parse_version_tuple(latest_tag)
+        if error is None and (current is None or latest is None):
+            error = f"Cannot compare versions '{APP_VERSION}' and '{latest_tag}'."
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Check for updates")
+        open_button = None
+        if error is not None:
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText("Could not check for updates.")
+            box.setInformativeText(f"{error}\n\nYou can check the releases page manually.")
+            open_button = box.addButton("Open releases page", QMessageBox.ButtonRole.ActionRole)
+        elif latest > current:
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(f"A newer SimPhant version is available: {latest_tag.lstrip('vV')}")
+            box.setInformativeText(f"You are running version {APP_VERSION}.")
+            open_button = box.addButton("Open download page", QMessageBox.ButtonRole.ActionRole)
+        elif latest == current:
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText("You are running the latest SimPhant version.")
+            box.setInformativeText(f"Version {APP_VERSION}")
+        else:
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText("You are running a newer version than the latest public release.")
+            box.setInformativeText(f"Your version: {APP_VERSION}\nLatest release: {latest_tag.lstrip('vV')}")
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        if open_button is not None and box.clickedButton() is open_button:
+            QDesktopServices.openUrl(QUrl(release_url))
 
     def open_documentation(self):
         """Opens the public SimPhant documentation website in the default browser."""
@@ -1834,8 +1916,8 @@ class PhysicsEngineMain(QMainWindow):
                 elif is_rframe:
                     if not self.ui.Edit_RFBodyI_Bushing.text():
                         self.ui.Edit_RFBodyI_Bushing.setText(item_name)
-                    # elif self.ui.Edit_RFBodyI_Bushing.text() != item_name:    # Hide the input field for now, unless Bushing with 2 RFs is properly tested
-                    #     self.ui.Edit_RFBodyJ_Bushing.setText(item_name)       
+                    elif self.ui.Edit_RFBodyI_Bushing.text() != item_name:
+                        self.ui.Edit_RFBodyJ_Bushing.setText(item_name)
                         
             # --- Check if the Contact page is currently active ---
             elif self.ui.stckProperties.currentIndex() == 8: 
@@ -2729,7 +2811,96 @@ class PhysicsEngineMain(QMainWindow):
 
         print(f"Successfully renamed Joint '{old_name}' to '{new_name}'.")
                             
+    def _on_viewport_left_press(self, obj, event):
+        # Shift state is latched at press time, so releasing Shift before the mouse still counts
+        vtk_iren = self.plotter.iren.interactor
+        self._rf_pick_start = tuple(vtk_iren.GetEventPosition()) if vtk_iren.GetShiftKey() else None
+
+    def _on_viewport_left_release(self, obj, event):
+        if self._rf_pick_start is None:
+            return
+        x, y = self.plotter.iren.interactor.GetEventPosition()
+        if abs(x - self._rf_pick_start[0]) > 3 or abs(y - self._rf_pick_start[1]) > 3:
+            return  # It was a Shift+drag (pan), not a click
+
+        candidates = self._find_rfs_at_pixel(x, y)
+        if not candidates:
+            return
+
+        # Repeated click at the same spot advances to the next overlapping RF
+        rf = candidates[0]
+        last = self._rf_cycle_pos
+        if last is not None and abs(x - last[0]) <= 3 and abs(y - last[1]) <= 3:
+            names = [c.name for c in candidates]
+            if self.selected_rframe in names:
+                rf = candidates[(names.index(self.selected_rframe) + 1) % len(candidates)]
+        self._rf_cycle_pos = (x, y)
+
+        rf_item = next((self.node_rframes.child(i) for i in range(self.node_rframes.childCount())
+                        if self.node_rframes.child(i).text(0) == rf.name), None)
+        if rf_item is None:
+            return
+
+        self.ui.treeHierarchy.blockSignals(True)
+        self.ui.treeHierarchy.setCurrentItem(rf_item)
+        self.ui.treeHierarchy.blockSignals(False)
+        self.ui.treeHierarchy.scrollToItem(rf_item)
+        self.on_tree_selected()
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_Shift:
+            self._set_rf_pick_cursor(et == QEvent.Type.KeyPress)
+        elif et == QEvent.Type.WindowDeactivate and obj is self:
+            self._set_rf_pick_cursor(False)
+        return super().eventFilter(obj, event)
+
+    def _set_rf_pick_cursor(self, active):
+        if active:
+            self.plotter.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.plotter.unsetCursor()
+
+    def _find_rfs_at_pixel(self, px, py, tolerance_px=10.0, overlap_px=3.0):
+        """ Returns the visible RFs whose axes pass within overlap_px of the closest hit (ignores occlusion), in stable list order. """
+        renderer = self.plotter.renderer
+
+        def to_display(p):
+            renderer.SetWorldPoint(p[0], p[1], p[2], 1.0)
+            renderer.WorldToDisplay()
+            return renderer.GetDisplayPoint()
+
+        click = np.array([px, py], dtype=float)
+        hits = []
+
+        for rf in self.rframes:
+            if not rf.visible:
+                continue
+            origin = rf.position * MMtoM
+            o = to_display(origin)
+            if not (0.0 <= o[2] <= 1.0):
+                continue
+            o2 = np.array(o[:2])
+
+            rf_dist = float('inf')
+            for axis in range(3):
+                t = to_display(origin + rf.transform_matrix[:, axis] * rf.base_scale)
+                seg = np.array(t[:2]) - o2
+                seg_len2 = float(seg @ seg)
+                s = 0.0 if seg_len2 < 1e-12 else min(max(float((click - o2) @ seg) / seg_len2, 0.0), 1.0)
+                rf_dist = min(rf_dist, float(np.linalg.norm(click - (o2 + s * seg))))
+            if rf_dist < tolerance_px:
+                hits.append((rf, rf_dist))
+
+        if not hits:
+            return []
+        best = min(d for _, d in hits)
+        return [rf for rf, d in hits if d <= best + overlap_px]
+
     def on_mesh_picked(self, picked_mesh):
+        if self._rf_pick_start is not None:
+            return  # Shift+click is handled by the RF picker
+
         picked_actor = self.plotter.picker.GetActor()
         
         if not picked_actor:
@@ -3610,7 +3781,7 @@ class PhysicsEngineMain(QMainWindow):
         integrator_idx = self.ui.cmbSolverMethod.currentIndex()
         if integrator_idx == 0:   active_integrator = CustomRK4()
         elif integrator_idx == 1: active_integrator = CustomEuler()
-        elif integrator_idx == 2: active_integrator = CustomSymplecticEuler()
+        elif integrator_idx == 2: active_integrator = CustomSymplecticEuler(n_pos=self.solver.N_pos)
         
         # --- THE UPGRADE: Pass the new kwargs to all SciPy Integrators! ---
         elif integrator_idx == 3: active_integrator = SciPyIntegrator(method='RK45', rtol=rtol_val, atol=atol_val, max_step=max_step_val)
@@ -5859,6 +6030,16 @@ class PhysicsEngineMain(QMainWindow):
             k_t, c_t, p_t, k_r, c_r, p_r = self._read_bushing_ui_arrays()
         except ValueError: return
 
+        # RF Body I carries the bushing frame (axes of stiffness, damping and preload). RF Body J is optional.
+        rf_i_name = self.ui.Edit_RFBodyI_Bushing.text().strip()
+        rf_j_name = self.ui.Edit_RFBodyJ_Bushing.text().strip()
+        if not any(rf.name == rf_i_name for rf in self.rframes):
+            QMessageBox.warning(self, "Bushing", "Select RF Body I: it defines the position and the axes of the bushing.")
+            return
+
+        # The anchors are bound to the model pose at t=0: rewind first if results are being shown
+        self.invalidate_results()
+
         counter = len(self.bushings_list) + 1
         b_name = f"Bushing_{counter}"
         while any(b.name == b_name for b in self.bushings_list):
@@ -5866,14 +6047,14 @@ class PhysicsEngineMain(QMainWindow):
             b_name = f"Bushing_{counter}"
 
         bushing = Bushing(
-            name=b_name, body_i=body_i, rf_i_name=self.ui.Edit_RFBodyI_Bushing.text().strip(),
-            body_j=body_j, rf_j_name=self.ui.Edit_RFBodyJ_Bushing.text().strip(), plotter=self.plotter
+            name=b_name, body_i=body_i, rf_i_name=rf_i_name,
+            body_j=body_j, rf_j_name=rf_j_name, plotter=self.plotter
         )
         
         bushing.k_trans, bushing.c_trans, bushing.p_trans = k_t, c_t, p_t
         bushing.k_rot, bushing.c_rot, bushing.p_rot = k_r, c_r, p_r
 
-        # Bind the geometric triad directly to RF_I!
+        # Bind the frame to RF_I and the anchor on Body J to RF_J (or to RF_I if RF_J is empty)
         bushing.bind_kinematics(self.rframes)
         
         self.bushings_list.append(bushing)
@@ -5882,7 +6063,6 @@ class PhysicsEngineMain(QMainWindow):
         self.ui.Edit_BushingName.setText(bushing.name)
         self.ui.btnAddBushing.setEnabled(False)
         
-        self.invalidate_results()
         print(f"Added {bushing.name}")
         
         bushing.update_transform(self.rframes[0].base_scale if self.rframes else 10.0)
@@ -5896,12 +6076,18 @@ class PhysicsEngineMain(QMainWindow):
         
         try:
             k_t, c_t, p_t, k_r, c_r, p_r = self._read_bushing_ui_arrays()
-            bushing.k_trans, bushing.c_trans, bushing.p_trans = k_t, c_t, p_t
-            bushing.k_rot, bushing.c_rot, bushing.p_rot = k_r, c_r, p_r
-            bushing.rf_j_name = self.ui.Edit_RFBodyJ_Bushing.text().strip()
         except ValueError: return
+        rf_j_name = self.ui.Edit_RFBodyJ_Bushing.text().strip()
         
+        # The anchors are bound to the model pose at t=0: rewind first if results are being shown
         self.invalidate_results()
+        
+        bushing.k_trans, bushing.c_trans, bushing.p_trans = k_t, c_t, p_t
+        bushing.k_rot, bushing.c_rot, bushing.p_rot = k_r, c_r, p_r
+        if rf_j_name != bushing.rf_j_name:
+            bushing.rf_j_name = rf_j_name
+            bushing.bind_kinematics(self.rframes)
+        
         print(f"Updated {bushing.name}")
 
     def delete_bushing(self):
