@@ -10,14 +10,16 @@ from unittest.mock import patch
 import numpy as np
 import pyvista as pv
 import trimesh
-from scipy.integrate import trapezoid
+from scipy.integrate import trapezoid, solve_ivp
 from scipy.spatial.transform import Rotation
 
 from integrators import SciPyIntegrator
-from unit_collision import ContactPair, RegionContactGeometry, ContactResolutionError
-from unit_joints import JointType
+from unit_collision import ContactPair, RegionContactGeometry, ContactResolutionError, _contact_stage
+from unit_forces import Force, ForceType, ForceFrame
+from unit_joints import JointType, GearPair, GearType
 from unit_rigidbody import RigidBody
 from unit_solver import MBSolver
+from unit_springs import CompressionSpring, TorsionSpring
 
 
 class ContactRegionTests(unittest.TestCase):
@@ -39,6 +41,31 @@ class ContactRegionTests(unittest.TestCase):
         self.assertAlmostEqual(depths[0], 0.0005, delta=1e-12)
         np.testing.assert_allclose(points[:, :2], 0.0, atol=1e-11)
         np.testing.assert_allclose(normals, [[0, 0, 1]], atol=1e-9)
+
+    def test_profile_preserves_geometry_and_counts_empty_queries(self):
+        profile = {}
+        measured = self.ball.contact_regions(
+            self.floor, self.rotation, self.ball_position, self.rotation, self.zero, profile=profile)
+        for expected, actual in zip(self.ball_contact(), measured):
+            np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(profile['regions_measured'], 1)
+        self.assertEqual(profile['ray_queries'], 1)
+        for key in ('boolean_time', 'region_processing_time', 'ray_query_time'):
+            self.assertGreater(profile[key], 0)
+        self.ball.contact_regions(self.floor, self.rotation, np.array([0., 0., 1.]),
+                                  self.rotation, self.zero, profile=profile)
+        self.assertEqual(profile['empty_intersections'], 1)
+        self.assertEqual(profile['ray_queries'], 1)
+
+    def test_profile_timers_are_exclusive_and_include_failures(self):
+        profile = {}
+        with patch('unit_collision.perf_counter', side_effect=[0., 1., 3., 6.]):
+            with self.assertRaises(ContactResolutionError):
+                with _contact_stage(profile, 'region_processing_time', exclude='ray_query_time'):
+                    with _contact_stage(profile, 'ray_query_time'):
+                        raise ContactResolutionError('probe')
+        self.assertEqual(profile['ray_query_time'], 2.)
+        self.assertEqual(profile['region_processing_time'], 4.)
 
     def test_subdivision_does_not_multiply_stiffness(self):
         refined = RegionContactGeometry(self.ball_mesh.subdivide(), 'refined ball')
@@ -304,6 +331,18 @@ class SolverRegionTests(unittest.TestCase):
         self.assertGreater(contact.current_F_friction, 0.0)
         self.assertLessEqual(contact.current_F_friction, contact.mu * contact.current_F_total)
 
+    def test_profile_counts_contact_bearing_rhs_once_for_multiple_pairs(self):
+        solver, contact = self.make_solver()
+        solver.contact_pairs.append(ContactPair(
+            'second', contact.body_i, contact.body_j, 1., 1., 0.))
+        solver.prepare_runtime_evaluation_state()
+        solver._reset_solver_profile()
+        with contextlib.redirect_stdout(io.StringIO()):
+            solver.evaluate_derivatives(0., solver.pack_state())
+        self.assertEqual(solver.solve_profile['rhs_calls'], 1)
+        self.assertEqual(solver.solve_profile['rhs_with_contact_regions'], 1)
+        self.assertEqual(solver.solve_profile['contact_points_total'], 2)
+
     def test_full_impact_peak_impulse_and_energy(self):
         solver, contact = self.make_solver()
         ball = contact.body_i
@@ -314,7 +353,11 @@ class SolverRegionTests(unittest.TestCase):
                     method='RK45', rtol=1e-7, atol=1e-9, max_step=0.0001),
                 post_process=False)
             history_before = solver.simulation_history.copy()
+            profile_before = json.dumps(solver.solve_profile, sort_keys=True)
             solver.ensure_postprocessed()
+        self.assertEqual(json.dumps(solver.solve_profile, sort_keys=True), profile_before)
+        self.assertEqual(solver.postprocess_profile['rhs_calls'], len(history_before))
+        self.assertEqual(solver.integration_step_profile['rhs_calls'], solver.solve_profile['rhs_calls'])
         np.testing.assert_array_equal(solver.simulation_history, history_before)
         force = solver.contact_history[:, 0, 2]
         expected_peak = np.sqrt(2.0 * 9.81 * 0.1) * np.sqrt(contact.stiffness * ball.mass)
@@ -332,8 +375,9 @@ class SolverRegionTests(unittest.TestCase):
 
 class SavedModelTests(unittest.TestCase):
     @staticmethod
-    def load_solver(filename):
-        with zipfile.ZipFile(Path(__file__).resolve().parents[1] / 'Examples' / filename) as archive:
+    def load_solver(filename, alpha=20, epsilon=1e-7):
+        path = Path(__file__).resolve().parents[1] / 'Examples' / filename
+        with zipfile.ZipFile(path) as archive:
             model = json.loads(archive.read('model.json'))
             bodies = {'Ground': RigidBody('Ground', None, None, None, None, is_ground=True)}
             for data in model['bodies']:
@@ -358,11 +402,54 @@ class SavedModelTests(unittest.TestCase):
                 if key.startswith('local_'):
                     values[key] = np.asarray(values[key])
             joints.append(SimpleNamespace(**values))
-        assert not any(model.get(key) for key in ('springs', 'bushings', 'gears', 'motions'))
-        assert all(data.get('is_gravity') for data in model['forces'])
-        forces = [SimpleNamespace(enabled=data['enabled'], is_gravity=True,
-                                  parent_body=bodies[data['parent_body']],
-                                  base_vector=np.asarray(data['base_vector'])) for data in model['forces']]
+        assert not any(item.get('enabled', True) for key in ('bushings', 'motions')
+                       for item in model.get(key, [])), 'Headless fixture loader does not support these active elements'
+        springs = []
+        for data in model.get('springs', []):
+            assert not data.get('is_nonlinear', False), 'Headless fixture loader supports linear springs only'
+            arguments = (data['name'], bodies[data['body_i']], data['rf_i_name'],
+                         bodies[data['body_j']], data['rf_j_name'])
+            if data['type'] == 'compression':
+                with patch.object(CompressionSpring, 'create_visuals'):
+                    spring = CompressionSpring(*arguments, None)
+            elif data['type'] == 'torsion':
+                with patch.object(TorsionSpring, 'create_visuals'):
+                    spring = TorsionSpring(*arguments, data.get('axis_choice', 'Z'), None)
+            else:
+                raise ValueError(f"Unsupported saved spring type: {data['type']}")
+            for key in ('stiffness', 'damping', 'preload', 'enabled'):
+                setattr(spring, key, data[key])
+            for key in ('local_pos_i', 'local_pos_j', 'local_axis_i', 'local_ref_i', 'local_ref_j'):
+                if key in data:
+                    setattr(spring, key, np.asarray(data[key]))
+            springs.append(spring)
+        joint_by_name = {joint.name: joint for joint in joints}
+        gears = []
+        for data in model.get('gears', []):
+            gear = GearPair(
+                data['name'], joint_by_name[data['joint_1']], joint_by_name[data['joint_2']],
+                GearType(data['gear_type']), module_n=data.get('module', 2.),
+                z1=data.get('z1', 20), z2=data.get('z2', 20),
+                alpha_deg=data.get('alpha_deg', 20.), beta_deg=data.get('beta_deg', 0.),
+                gamma_deg=data.get('gamma_deg', 45.))
+            gear.carrier = bodies[data['carrier']]
+            gear.enabled = data.get('enabled', True)
+            gears.append(gear)
+        forces = []
+        for data in model['forces']:
+            if data.get('is_gravity'):
+                force = SimpleNamespace(enabled=data['enabled'], is_gravity=True,
+                                        parent_body=bodies[data['parent_body']],
+                                        base_vector=np.asarray(data['base_vector']))
+            else:
+                with patch.object(Force, 'create_visuals'):
+                    force = Force(data['name'], ForceType(data['force_type']), bodies[data['parent_body']],
+                                  ForceFrame(data['fixed_in']), data['local_position'], data['base_vector'], None)
+                for key in ('enabled', 'speed_max', 'allow_braking'):
+                    setattr(force, key, data[key])
+                assert force.compile_expression(str(data.get('expression_str', data['magnitude'])),
+                                                base_dir=str(path.parent))
+            forces.append(force)
         contacts = []
         for data in model['contacts']:
             contact = ContactPair(
@@ -373,8 +460,9 @@ class SavedModelTests(unittest.TestCase):
                 d_max_ui=data.get('d_max_m', 0.0001) * 1000)
             contact.enabled = data['enabled']
             contacts.append(contact)
-        return MBSolver(bodies, forces, joints_list=joints, contact_pairs=contacts,
-                        alpha=20, beta=20, epsilon=1e-7)
+        return MBSolver(bodies, forces, joints_list=joints, springs_list=springs,
+                contact_pairs=contacts, gear_pairs=gears,
+                        alpha=alpha, beta=alpha, epsilon=epsilon)
 
     def check_model(self, filename, duration):
         solver = self.load_solver(filename)
@@ -398,6 +486,48 @@ class SavedModelTests(unittest.TestCase):
 
 
 class IntegrationRecoveryTests(unittest.TestCase):
+    def test_profile_matches_scipy_and_accounts_for_error_rejections(self):
+        class Model:
+            contact_pairs = [True]
+
+            def evaluate(self, time, state):
+                return -1000. * state
+
+        times = np.linspace(0., .2, 31)
+        for method, stages in (('RK23', 3), ('RK45', 6), ('DOP853', 12)):
+            with self.subTest(method=method):
+                model = Model()
+                integrator = SciPyIntegrator(method=method, rtol=1e-5, atol=1e-8)
+                history = integrator.solve(model.evaluate, (0., .2), np.ones(1), times)
+                baseline = solve_ivp(model.evaluate, (0., .2), np.ones(1), method=method,
+                                     rtol=1e-5, atol=1e-8, t_eval=times)
+                np.testing.assert_array_equal(history, baseline.y.T)
+                profile = integrator.step_profile
+                self.assertGreater(profile['rejected_steps'], 0)
+                self.assertEqual(profile['step_rhs_calls'], stages * (
+                    profile['accepted_steps'] + profile['rejected_steps']))
+                self.assertEqual(profile['rejected_rhs_calls'], stages * profile['rejected_steps'])
+                self.assertEqual(profile['rhs_calls'], sum(profile[f'{phase}_rhs_calls']
+                    for phase in ('initialization', 'step', 'dense_output', 'rollback')))
+                self.assertAlmostEqual(profile['accepted_sim_time'], .2)
+                self.assertEqual(profile['recovery_cap_active_steps'], 0)
+                self.assertEqual(profile['geometry_retries'], 0)
+                self.assertGreater(profile['dense_output_unused'], 0)
+                self.assertEqual(profile['dense_output_rhs_calls'],
+                                 3 * profile['accepted_steps'] if method == 'DOP853' else 0)
+
+    def test_profile_distinguishes_user_cap_from_recovery_cap(self):
+        class Model:
+            contact_pairs = [True]
+
+            def evaluate(self, time, state):
+                return -state
+
+        integrator = SciPyIntegrator(max_step=.001)
+        integrator.solve(Model().evaluate, (0., .01), np.ones(1), np.linspace(0, .01, 11))
+        self.assertEqual(integrator.step_profile['user_cap_limited_steps'], 10)
+        self.assertEqual(integrator.step_profile['recovery_cap_limited_steps'], 0)
+
     def test_repeated_unresolved_trials_have_bounded_retries(self):
         class Model:
             contact_pairs = [True]
@@ -441,6 +571,15 @@ class IntegrationRecoveryTests(unittest.TestCase):
                 integrator = SciPyIntegrator(method=method, rtol=1e-7, atol=1e-9)
                 history = integrator.solve(model.evaluate, (0.0, 0.2), np.ones(1), times)
                 self.assertEqual(integrator.contact_retries, 1)
+                profile = integrator.step_profile
+                self.assertEqual(profile['geometry_retries'], 1)
+                self.assertEqual(profile['rollback_rhs_calls'], 1)
+                self.assertEqual(len(profile['recovery_events']), 1)
+                self.assertGreater(profile['recovery_cap_limited_steps'], 0)
+                self.assertGreater(profile['recovery_cap_limited_wall_time'], 0)
+                self.assertLessEqual(profile['recovery_cap_limited_sim_time'], .2)
+                if method in ('Radau', 'BDF', 'LSODA'):
+                    self.assertIsNone(profile['rejected_steps'])
                 np.testing.assert_allclose(history[:, 0], np.exp(-times), rtol=2e-6)
 
     def test_unresolved_initial_contact_is_not_silently_ignored(self):

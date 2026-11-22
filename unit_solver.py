@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_solver.py
 #  Description:
 #      The core Multibody Dynamics (MBD) engine that formulates the Augmented DAE matrices, 
@@ -10,20 +10,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
@@ -121,6 +121,17 @@ class MBSolver:
             'active_contact_pairs_peak': 0,
             'contact_points_total': 0,
             'region_intersections': 0,
+            'boolean_time': 0.0,
+            'region_processing_time': 0.0,
+            'ray_query_time': 0.0,
+            'ray_queries': 0,
+            'rays_total': 0,
+            'ray_candidates_total': 0,
+            'regions_measured': 0,
+            'empty_intersections': 0,
+            'rhs_with_active_pairs': 0,
+            'rhs_with_contact_regions': 0,
+            'pairs': {},
         }
 
     def _get_solver_profile(self):
@@ -142,10 +153,47 @@ class MBSolver:
             f"{profile['active_contact_pairs_total']} / {profile['active_contact_pairs_peak']}\n"
             f"  Region intersection queries: {profile['region_intersections']}\n"
             f"  Total contact regions processed: {profile['contact_points_total']}\n"
+            f"{self._format_contact_stages(profile)}\n"
             f"  Post-processing time: {post_processing_time:.3f} s"
         )
+        steps = getattr(self, 'integration_step_profile', None)
+        if steps is not None:
+            rejected = steps['rejected_steps']
+            rejected_label = str(rejected) if rejected is not None else 'unavailable for this SciPy method'
+            summary += (
+                f"\n  Accepted steps: {steps['accepted_steps']}; error-test rejections: {rejected_label}"
+                f"; geometry retries: {steps['geometry_retries']}\n"
+                f"  Accepted step min/max: {steps['min_accepted_step']} / {steps['max_accepted_step']:.9g} s\n"
+                f"  RHS initialization/step/dense-output/rollback: {steps['initialization_rhs_calls']} / "
+                f"{steps['step_rhs_calls']} / {steps['dense_output_rhs_calls']} / {steps['rollback_rhs_calls']}\n"
+                f"  RHS wall time: {steps['rhs_time']:.3f} s; error-rejected RHS: {steps['rejected_rhs_calls']}\n"
+                f"  Dense output calls/unused: {steps['dense_output_calls']} / {steps['dense_output_unused']}"
+                f"; wall time (includes its RHS): {steps['dense_output_time']:.3f} s\n"
+                f"  Recovery cap active: {steps['recovery_cap_active_steps']} accepted steps, "
+                f"{steps['recovery_cap_active_sim_time']:.9g} simulated s, "
+                f"{steps['recovery_cap_active_wall_time']:.3f} wall s\n"
+                f"  Recovery cap reached: {steps['recovery_cap_limited_steps']} accepted steps, "
+                f"{steps['recovery_cap_limited_sim_time']:.9g} simulated s, "
+                f"{steps['recovery_cap_limited_wall_time']:.3f} wall s, "
+                f"{steps['recovery_cap_limited_rhs_calls']} RHS\n"
+                f"  Final recovery cap: {steps['final_recovery_cap']}; "
+                f"user-cap-limited steps: {steps['user_cap_limited_steps']}"
+            )
         logging.info(summary)
         print(summary)
+
+    @staticmethod
+    def _format_contact_stages(profile):
+        return (
+            f"  Boolean intersection time: {profile['boolean_time']:.3f} s\n"
+            f"  Region processing time (excluding rays): {profile['region_processing_time']:.3f} s\n"
+            f"  Ray query time (including tree, candidates, hit intervals): {profile['ray_query_time']:.3f} s\n"
+            f"  Empty intersections: {profile['empty_intersections']}; regions measured: {profile['regions_measured']}\n"
+            f"  Ray batches/rays/candidates: {profile['ray_queries']} / {profile['rays_total']} / "
+            f"{profile['ray_candidates_total']}\n"
+            f"  RHS with AABB pairs/force regions: {profile['rhs_with_active_pairs']} / "
+            f"{profile['rhs_with_contact_regions']}"
+        )
 
     def _clear_postprocess_histories(self):
         """Clears derived telemetry histories until they are extracted explicitly."""
@@ -156,13 +204,36 @@ class MBSolver:
         self.diagnostics_ready = False
 
     def _extract_result_diagnostics(self, time_history):
+        """Keep telemetry RHS work separate from the integration profile."""
+        integration_profile = self._get_solver_profile()
+        self._reset_solver_profile()
+        started = perf_counter()
+        try:
+            return self._evaluate_result_diagnostics(time_history)
+        finally:
+            self.postprocess_profile = self.solve_profile
+            self.solve_profile = integration_profile
+            self.postprocess_wall_time = perf_counter() - started
+            logging.info(
+                "Post-processing profile: %.3f s; RHS: %d; narrow phase: %.3f s\n%s",
+                self.postprocess_wall_time, self.postprocess_profile['rhs_calls'],
+                self.postprocess_profile['narrowphase_time'],
+                self._format_contact_stages(self.postprocess_profile))
+
+    def _evaluate_result_diagnostics(self, time_history):
         """Evaluates recorded frames to populate joint, gear, motion, and contact histories."""
         actual_frames = len(self.simulation_history)
+
+        active_motions = [
+            m for m in self.motions_list
+            if m.enabled and m.joint.enabled and m.joint.body_i.enabled and m.joint.body_j.enabled
+        ]
+        self.num_motion_eq = len(active_motions)
 
         self.lambda_history = np.zeros((actual_frames, self.num_equations))
         self.gear_lambda_history = np.zeros((actual_frames, self.num_gear_eq)) if hasattr(self, 'num_gear_eq') else np.zeros((actual_frames, 0))
         self.contact_history = np.zeros((actual_frames, len(self.contact_pairs), 4))
-        self.motion_lambda_history = np.zeros((actual_frames, getattr(self, 'num_motion_eq', 0)))
+        self.motion_lambda_history = np.zeros((actual_frames, self.num_motion_eq))
 
         print(f"Extracting Reaction Forces for {actual_frames} recorded frames...")
 
@@ -410,6 +481,13 @@ class MBSolver:
             
             self.g_n1_loc[k] = gear.n1_loc
             self.g_n2_loc[k] = gear.n2_loc
+
+        # --- PREPARE MOTION EQUATION COUNT ---
+        active_motions = [
+            m for m in self.motions_list
+            if m.enabled and m.joint.enabled and m.joint.body_i.enabled and m.joint.body_j.enabled
+        ]
+        self.num_motion_eq = len(active_motions)
 
     def pack_dynamic_states(self):
         """ Quickly dumps current states to flat arrays for Numba. """
@@ -872,6 +950,7 @@ class MBSolver:
         profile['broadphase_time'] += perf_counter() - broadphase_start
         active_contact_count = len(active_contacts)
         profile['active_contact_pairs_total'] += active_contact_count
+        profile['rhs_with_active_pairs'] += int(active_contact_count > 0)
         if active_contact_count > profile['active_contact_pairs_peak']:
             profile['active_contact_pairs_peak'] = active_contact_count
         
@@ -880,11 +959,10 @@ class MBSolver:
         # ==========================================
         # --- PHASE 3 - COMPLIANT CONTACT FORCES ---
         # ==========================================
+        regions_before = profile['contact_points_total']
         for cp in active_contacts:
             # We pass the two bodies defined in the pair to the Narrow Phase
-            narrowphase_start = perf_counter()
             manifold_i_j, manifold_j_i = self.evaluate_narrow_phase(cp)
-            profile['narrowphase_time'] += perf_counter() - narrowphase_start
             points_i_j, normals_i_j, depths_i_j = manifold_i_j
             points_j_i, normals_j_i, depths_j_i = manifold_j_i
             contact_point_count = len(depths_i_j) + len(depths_j_i)
@@ -901,6 +979,7 @@ class MBSolver:
                     max_depth = max(max_depth, float(np.max(depths_j_i)))
                 print(f"[{t:.3f}s] NARROW PHASE: {contact_point_count} regions between {cp.body_i.name} & {cp.body_j.name} (Max Depth: {max_depth * 1000.0:.2f} mm)")
                 self.last_collision_print_time = t
+        profile['rhs_with_contact_regions'] += int(profile['contact_points_total'] > regions_before)
         # ==========================================
 
         # ==========================================
@@ -1127,6 +1206,10 @@ class MBSolver:
             integrator = CustomRK4()
 
         self._reset_solver_profile()
+        self.integration_step_profile = None
+        self.postprocess_profile = None
+        self.integration_wall_time = 0.0
+        self.postprocess_wall_time = 0.0
         total_solve_start = perf_counter()
         post_processing_time = 0.0
             
@@ -1154,7 +1237,9 @@ class MBSolver:
         # This single line handles the entire timeline!
         # SciPy will adaptively shrink dt internally to resolve collisions/stiffness.
         try:
+            integration_start = perf_counter()
             Y_history = integrator.solve(self.evaluate_derivatives, t_span, initial_Y, t_eval, progress_callback)
+            self.integration_wall_time = perf_counter() - integration_start
             actual_frames = len(Y_history)
             self.simulation_history = np.array(Y_history, copy=True)
             self.time_history = np.array(t_eval[:actual_frames], copy=True)
@@ -1170,6 +1255,8 @@ class MBSolver:
             return self.simulation_history
         finally:
             total_solve_time = perf_counter() - total_solve_start
+            self.total_solve_time = total_solve_time
+            self.integration_step_profile = getattr(integrator, 'step_profile', None)
             self._log_solver_profile(total_solve_time, post_processing_time)
     
     # ==========================================
@@ -1623,11 +1710,11 @@ class MBSolver:
                                 idx += 6
                     
                     # F. --- Record Kinematic Motion Actuator Effort ---
-                    if hasattr(self, 'motion_lambda_history') and getattr(self, 'num_motion_eq', 0) > 0:
+                    if hasattr(self, 'motion_lambda_history') and self.motion_lambda_history is not None and self.motion_lambda_history.shape[1] > 0:
                         mot_lambdas = self.motion_lambda_history[i]
                         m_idx = 0
                         for motion in self.motions_list:
-                            if not motion.enabled or not motion.joint.enabled: continue
+                            if not motion.enabled or not motion.joint.enabled or not motion.joint.body_i.enabled or not motion.joint.body_j.enabled: continue
                             row_data.append(fmt(mot_lambdas[m_idx]))
                             m_idx += 1
                     
@@ -1711,17 +1798,31 @@ class MBSolver:
     
     def evaluate_narrow_phase(self, cp):
         """Evaluate each disconnected solid overlap once, independent of vertex count."""
-        body_a, body_b = cp.body_i, cp.body_j
-        mesh_mode = getattr(cp, 'mesh_mode', 0)
-        geometry_a = self._get_collision_cache(body_a, mesh_mode)
-        geometry_b = self._get_collision_cache(body_b, mesh_mode)
-        self._get_solver_profile()['region_intersections'] += 1
+        profile = self._get_solver_profile()
+        stages = ('boolean_time', 'region_processing_time', 'ray_query_time')
+        pair = profile['pairs'].setdefault(cp.name, dict.fromkeys(
+            ('queries', 'regions', 'time') + stages, 0))
+        before = tuple(profile[key] for key in stages)
+        started = perf_counter()
+        pair['queries'] += 1
         try:
+            body_a, body_b = cp.body_i, cp.body_j
+            mesh_mode = getattr(cp, 'mesh_mode', 0)
+            geometry_a = self._get_collision_cache(body_a, mesh_mode)
+            geometry_b = self._get_collision_cache(body_b, mesh_mode)
+            profile['region_intersections'] += 1
             manifold = geometry_a.contact_regions(
                 geometry_b, body_a.principal_axes, body_a.cog,
-                body_b.principal_axes, body_b.cog)
+                body_b.principal_axes, body_b.cog, profile=profile)
+            pair['regions'] += len(manifold[2])
         except ContactResolutionError as exc:
             raise ContactResolutionError(f"Contact '{cp.name}': {exc}") from exc
         except (ValueError, RuntimeError) as exc:
             raise ValueError(f"Contact '{cp.name}': {exc}") from exc
+        finally:
+            elapsed = perf_counter() - started
+            profile['narrowphase_time'] += elapsed
+            pair['time'] += elapsed
+            for key, previous in zip(stages, before):
+                pair[key] += profile[key] - previous
         return manifold, empty_contact_manifold()

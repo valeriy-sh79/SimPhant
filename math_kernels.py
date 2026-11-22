@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: math_kernels.py
 #  Description:
 #      Provides optimized mathematical kernels for multibody dynamics simulations, including
@@ -11,20 +11,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
@@ -35,7 +35,7 @@ _NUMBA_WARMED_UP = False
 # ==========================================
 # NUMBA HELPER MATH FUNCTIONS
 # ==========================================
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def skew(v):
     return np.array([
         [0.0, -v[2], v[1]],
@@ -43,7 +43,7 @@ def skew(v):
         [-v[1], v[0], 0.0]
     ])
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def assign_spherical_lock(Phi_q, gamma_star, row_idx, col_i, col_j,
                           r_i, r_j, s_i_glob, s_j_glob, v_i, v_j, 
                           w_i, w_j, sp_i, sp_j, A_i, A_j, alpha, beta):
@@ -69,7 +69,7 @@ def assign_spherical_lock(Phi_q, gamma_star, row_idx, col_i, col_j,
             Phi_q[row_idx + m, col_j+3:col_j+6] = J_wj_sph[m, :]
         gamma_star[row_idx + m] = g_star[m]
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def assign_rotational_lock(Phi_q, gamma_star, row_idx, col_i, col_j, 
                            vec_i, vec_j, vec_dot_i, vec_dot_j, vec_cent_i, vec_cent_j, 
                            A_i, A_j, alpha, beta):
@@ -81,7 +81,7 @@ def assign_rotational_lock(Phi_q, gamma_star, row_idx, col_i, col_j,
     if col_j >= 0: Phi_q[row_idx, col_j+3:col_j+6] = A_j.T @ np.cross(vec_j, vec_i)
     gamma_star[row_idx] = gamma - (2.0 * alpha * Phi_dot) - ((beta ** 2) * Phi)
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def assign_translational_lock(Phi_q, gamma_star, row_idx, col_i, col_j,
                               d, d_dot, d_cent, vec_i, vec_dot_i, vec_cent_i,
                               s_i_glob, s_j_glob, A_i, A_j, alpha, beta):
@@ -102,7 +102,7 @@ def assign_translational_lock(Phi_q, gamma_star, row_idx, col_i, col_j,
 # CORE JIT-COMPILED SOLVER KERNELS
 # ==========================================
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def assemble_jacobian_numba(num_equations, num_states_vel, j_types, b_idx_i, b_idx_j,
                             pos, rot, vel, ang, j_pos_i, j_pos_j, j_axis_i, 
                             j_a_i, j_b_i, # <--- THE FIX: Add arguments
@@ -185,7 +185,7 @@ def assemble_jacobian_numba(num_equations, num_states_vel, j_types, b_idx_i, b_i
 
     return Phi_q, gamma_star
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx_2, g_b_idx_c, g_n1_loc, g_n2_loc, rot, ang, alpha, baumgarte_enabled):
     """ 
     Assembles the 1-row Coupler Constraint Jacobian for perfectly rigid Epicyclic/Bevel gears!
@@ -233,7 +233,7 @@ def assemble_gear_jacobian_numba(num_gear_eq, num_states_vel, g_b_idx_1, g_b_idx
     return Phi_q, gamma_star
 
 # @njit(nopython=True, fastmath=True) # this line was originally here but was changed to the line below to avoid the warning
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def solve_kkt_system_numba(M_diag, Phi_q, Q, gamma_star, epsilon):
     """ Solves the Schur Complement. M is diagonal, so M^-1 is applied elementwise (no dense solve). """
     m, n = Phi_q.shape
@@ -251,7 +251,7 @@ def solve_kkt_system_numba(M_diag, Phi_q, Q, gamma_star, epsilon):
     return lambdas
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def apply_contact_manifold_numba(row_pen, row_tar,
                                  pen_cog, tar_cog,
                                  pen_velocity, tar_velocity,
@@ -332,6 +332,482 @@ def apply_contact_manifold_numba(row_pen, row_tar,
                 Q[row_tar + 3 + axis] += t_tar_loc[axis]
 
     return total_f_spring, total_f_damp, total_f_normal, total_f_friction
+
+
+# ==========================================
+# ROBOTICS KINEMATICS & IK NUMBA KERNELS
+# ==========================================
+# Step / DOF type codes for Robotics kernels:
+#   0 = FIXED, 1 = REVOLUTE, 2 = PRISMATIC
+# IK mode codes:
+#   0 = 6D Full Pose, 1 = 3D Position Only, 2 = 5D Position + Tool Z-Axis
+
+@njit(fastmath=True, cache=True)
+def matrix_to_pos_angles_deg_numba(R):
+    """
+    Converts a 3x3 rotation matrix to SimPhant's [Yaw(Z), Pitch(Y), Roll(X)] Euler angles in degrees
+    (extrinsic 'xyz' convention matching RigidBody.pos_angles and RFrame.orientation).
+    """
+    sy = np.hypot(R[0, 0], R[1, 0])
+    rad2deg = 180.0 / np.pi
+    if sy > 1e-7:
+        ang_x = np.arctan2(R[2, 1], R[2, 2])
+        ang_y = np.arctan2(-R[2, 0], sy)
+        ang_z = np.arctan2(R[1, 0], R[0, 0])
+    else:
+        ang_y = np.arctan2(-R[2, 0], sy)
+        ang_z = 0.0
+        if R[2, 0] < 0.0:
+            ang_x = np.arctan2(R[0, 1], R[1, 1])
+        else:
+            ang_x = np.arctan2(-R[0, 1], R[1, 1])
+    out = np.empty(3, dtype=np.float64)
+    out[0] = ang_z * rad2deg
+    out[1] = ang_y * rad2deg
+    out[2] = ang_x * rad2deg
+    return out
+
+
+@njit(fastmath=True, cache=True)
+def pos_angles_deg_to_matrix_numba(ori_zyx_deg):
+    """Converts SimPhant's [Yaw(Z), Pitch(Y), Roll(X)] angles in degrees to a 3x3 rotation matrix."""
+    deg2rad = np.pi / 180.0
+    az = ori_zyx_deg[0] * deg2rad
+    ay = ori_zyx_deg[1] * deg2rad
+    ax = ori_zyx_deg[2] * deg2rad
+    cx, sx = np.cos(ax), np.sin(ax)
+    cy, sy = np.cos(ay), np.sin(ay)
+    cz, sz = np.cos(az), np.sin(az)
+    R = np.empty((3, 3), dtype=np.float64)
+    R[0, 0] = cz * cy
+    R[0, 1] = cz * sy * sx - sz * cx
+    R[0, 2] = cz * sy * cx + sz * sx
+    R[1, 0] = sz * cy
+    R[1, 1] = sz * sy * sx + cz * cx
+    R[1, 2] = sz * sy * cx - cz * sx
+    R[2, 0] = -sy
+    R[2, 1] = cy * sx
+    R[2, 2] = cy * cx
+    return R
+
+
+@njit(fastmath=True, cache=True)
+def so3_rotvec_numba(R):
+    """Exact SO(3) logarithmic map (rotation vector axis * angle in rad) for a 3x3 rotation matrix."""
+    vx = 0.5 * (R[2, 1] - R[1, 2])
+    vy = 0.5 * (R[0, 2] - R[2, 0])
+    vz = 0.5 * (R[1, 0] - R[0, 1])
+    s = np.sqrt(vx * vx + vy * vy + vz * vz)
+    c = 0.5 * (R[0, 0] + R[1, 1] + R[2, 2] - 1.0)
+    if c > 1.0:
+        c = 1.0
+    elif c < -1.0:
+        c = -1.0
+    out = np.empty(3, dtype=np.float64)
+    if s > 1e-8:
+        scale = np.arctan2(s, c) / s
+        out[0] = vx * scale
+        out[1] = vy * scale
+        out[2] = vz * scale
+        return out
+    if c > 0.0:
+        out[0] = vx
+        out[1] = vy
+        out[2] = vz
+        return out
+    # Near 180 degrees: extract unit axis from symmetric part 0.5 * (R + I)
+    xx = max(0.0, 0.5 * (R[0, 0] + 1.0))
+    yy = max(0.0, 0.5 * (R[1, 1] + 1.0))
+    zz = max(0.0, 0.5 * (R[2, 2] + 1.0))
+    ax = np.sqrt(xx)
+    ay = np.sqrt(yy)
+    az = np.sqrt(zz)
+    if ax >= ay and ax >= az:
+        if R[0, 1] + R[1, 0] < 0.0:
+            ay = -ay
+        if R[0, 2] + R[2, 0] < 0.0:
+            az = -az
+    elif ay >= ax and ay >= az:
+        if R[0, 1] + R[1, 0] < 0.0:
+            ax = -ax
+        if R[1, 2] + R[2, 1] < 0.0:
+            az = -az
+    else:
+        if R[0, 2] + R[2, 0] < 0.0:
+            ax = -ax
+        if R[1, 2] + R[2, 1] < 0.0:
+            ay = -ay
+    norm = np.sqrt(ax * ax + ay * ay + az * az)
+    if norm > 1e-12:
+        scale = np.arctan2(s, c) / norm
+        out[0] = ax * scale
+        out[1] = ay * scale
+        out[2] = az * scale
+        return out
+    out[0] = np.pi
+    out[1] = 0.0
+    out[2] = 0.0
+    return out
+
+
+@njit(fastmath=True, cache=True)
+def forward_kinematics_chain_numba(
+    q,
+    base_pos,
+    base_rot,
+    step_types,
+    step_signs,
+    step_dof_idx,
+    step_p_parent,
+    step_p_child,
+    step_F_parent,
+    step_F_child_T,
+    step_axis_parent,
+    tcp_local_pos,
+    tcp_local_rot,
+):
+    """
+    Evaluates Forward Kinematics along a packed serial chain in compiled machine code.
+    Returns (body_pos, body_rot, joint_anchors, joint_axes, tcp_pos, tcp_rot).
+    """
+    n_steps = step_types.shape[0]
+    n_dof = q.shape[0]
+
+    body_pos = np.empty((n_steps + 1, 3), dtype=np.float64)
+    body_rot = np.empty((n_steps + 1, 3, 3), dtype=np.float64)
+    joint_anchors = np.empty((n_dof, 3), dtype=np.float64)
+    joint_axes = np.empty((n_dof, 3), dtype=np.float64)
+
+    body_pos[0] = base_pos
+    body_rot[0] = base_rot
+
+    Rz = np.eye(3, dtype=np.float64)
+
+    for s in range(n_steps):
+        r_p = body_pos[s]
+        A_p = body_rot[s]
+        j_type = step_types[s]
+        sign = step_signs[s]
+        dof_i = step_dof_idx[s]
+        q_val = q[dof_i] if dof_i >= 0 else 0.0
+
+        anchor_glob = r_p + A_p @ step_p_parent[s]
+        axis_glob = (A_p @ step_axis_parent[s]) * sign
+        norm_ax = np.linalg.norm(axis_glob)
+        if norm_ax > 1e-12:
+            axis_glob = axis_glob / norm_ax
+
+        if dof_i >= 0:
+            joint_anchors[dof_i] = anchor_glob
+            joint_axes[dof_i] = axis_glob
+
+        F_p = step_F_parent[s]
+        F_c_T = step_F_child_T[s]
+
+        if j_type == 1:  # REVOLUTE
+            th = sign * q_val
+            ct = np.cos(th)
+            st = np.sin(th)
+            Rz[0, 0] = ct
+            Rz[0, 1] = -st
+            Rz[1, 0] = st
+            Rz[1, 1] = ct
+            A_c = (A_p @ F_p) @ (Rz @ F_c_T)
+            r_c = anchor_glob - A_c @ step_p_child[s]
+        elif j_type == 2:  # PRISMATIC
+            A_c = A_p @ (F_p @ F_c_T)
+            r_c = anchor_glob + q_val * axis_glob - A_c @ step_p_child[s]
+        else:  # FIXED
+            A_c = A_p @ (F_p @ F_c_T)
+            r_c = anchor_glob - A_c @ step_p_child[s]
+
+        body_pos[s + 1] = r_c
+        body_rot[s + 1] = A_c
+
+    r_ee = body_pos[n_steps]
+    A_ee = body_rot[n_steps]
+    tcp_pos = r_ee + A_ee @ tcp_local_pos
+    tcp_rot = A_ee @ tcp_local_rot
+
+    return body_pos, body_rot, joint_anchors, joint_axes, tcp_pos, tcp_rot
+
+
+@njit(fastmath=True, cache=True)
+def compute_geometric_jacobian_numba(dof_types, joint_anchors, joint_axes, tcp_pos):
+    """Computes the 6 x N_dof analytical Geometric Jacobian J(q)."""
+    n_dof = dof_types.shape[0]
+    J = np.zeros((6, n_dof), dtype=np.float64)
+    for k in range(n_dof):
+        u_k = joint_axes[k]
+        if dof_types[k] == 1:  # REVOLUTE
+            diff = tcp_pos - joint_anchors[k]
+            J[0, k] = u_k[1] * diff[2] - u_k[2] * diff[1]
+            J[1, k] = u_k[2] * diff[0] - u_k[0] * diff[2]
+            J[2, k] = u_k[0] * diff[1] - u_k[1] * diff[0]
+            J[3, k] = u_k[0]
+            J[4, k] = u_k[1]
+            J[5, k] = u_k[2]
+        elif dof_types[k] == 2:  # PRISMATIC
+            J[0, k] = u_k[0]
+            J[1, k] = u_k[1]
+            J[2, k] = u_k[2]
+    return J
+
+
+@njit(fastmath=True, cache=True)
+def compute_pose_error_numba(tcp_pos, tcp_rot, target_pos, target_rot, mode_code):
+    """
+    Computes 6D task-space error vector [e_pos; e_rot] and scalar (pos_err_m, rot_err_rad).
+    mode_code: 0 = 6D, 1 = PositionOnly, 2 = PositionPlusAxis.
+    """
+    err_vec = np.zeros(6, dtype=np.float64)
+    e_pos = target_pos - tcp_pos
+    err_vec[0] = e_pos[0]
+    err_vec[1] = e_pos[1]
+    err_vec[2] = e_pos[2]
+    pos_err_m = np.sqrt(e_pos[0] * e_pos[0] + e_pos[1] * e_pos[1] + e_pos[2] * e_pos[2])
+
+    if mode_code == 1:  # PositionOnly
+        return err_vec, pos_err_m, 0.0
+
+    if mode_code == 2:  # PositionPlusAxis
+        z_curr = np.ascontiguousarray(tcp_rot[:, 2])
+        z_targ = np.ascontiguousarray(target_rot[:, 2])
+        cx = z_curr[1] * z_targ[2] - z_curr[2] * z_targ[1]
+        cy = z_curr[2] * z_targ[0] - z_curr[0] * z_targ[2]
+        cz = z_curr[0] * z_targ[1] - z_curr[1] * z_targ[0]
+        sin_ang = np.sqrt(cx * cx + cy * cy + cz * cz)
+        cos_ang = z_curr[0] * z_targ[0] + z_curr[1] * z_targ[1] + z_curr[2] * z_targ[2]
+        if cos_ang > 1.0:
+            cos_ang = 1.0
+        elif cos_ang < -1.0:
+            cos_ang = -1.0
+        rot_err_rad = np.arctan2(sin_ang, cos_ang)
+        if sin_ang > 1e-9:
+            scale = rot_err_rad / sin_ang
+            err_vec[3] = cx * scale
+            err_vec[4] = cy * scale
+            err_vec[5] = cz * scale
+        elif cos_ang < 0.0:
+            if abs(z_curr[0]) < 0.9:
+                px, py, pz = 1.0, 0.0, 0.0
+            else:
+                px, py, pz = 0.0, 1.0, 0.0
+            ax = z_curr[1] * pz - z_curr[2] * py
+            ay = z_curr[2] * px - z_curr[0] * pz
+            az = z_curr[0] * py - z_curr[1] * px
+            nrm = np.sqrt(ax * ax + ay * ay + az * az)
+            err_vec[3] = ax / nrm * np.pi
+            err_vec[4] = ay / nrm * np.pi
+            err_vec[5] = az / nrm * np.pi
+        return err_vec, pos_err_m, rot_err_rad
+
+    # mode_code == 0: Full 6D Pose
+    R_err = target_rot @ np.ascontiguousarray(tcp_rot.T)
+    e_rot = so3_rotvec_numba(R_err)
+    err_vec[3] = e_rot[0]
+    err_vec[4] = e_rot[1]
+    err_vec[5] = e_rot[2]
+    rot_err_rad = np.sqrt(e_rot[0] * e_rot[0] + e_rot[1] * e_rot[1] + e_rot[2] * e_rot[2])
+    return err_vec, pos_err_m, rot_err_rad
+
+
+@njit(fastmath=True, cache=True)
+def solve_ik_dls_numba(
+    q_seed,
+    base_pos,
+    base_rot,
+    step_types,
+    step_signs,
+    step_dof_idx,
+    step_p_parent,
+    step_p_child,
+    step_F_parent,
+    step_F_child_T,
+    step_axis_parent,
+    dof_types,
+    tcp_local_pos,
+    tcp_local_rot,
+    target_pos,
+    target_rot,
+    mode_code,
+    enforce_limits,
+    q_min,
+    q_max,
+    is_bounded,
+    q_mid,
+    pos_tol_m,
+    rot_tol_rad,
+    max_iters,
+    damping,
+    max_step_rad,
+):
+    """
+    Compiled Damped Least-Squares (Levenberg-Marquardt) IK solver with active-set box limits
+    and backtracking line search. Returns (q, iters_used, pos_err_m, rot_err_rad, tcp_pos, tcp_rot).
+    """
+    n_dof = q_seed.shape[0]
+    check_rot = (mode_code != 1)
+    m_task = 3 if mode_code == 1 else 6
+    rot_weight = 0.35 if check_rot else 0.0
+
+    q = q_seed.copy()
+    _, _, joint_anchors, joint_axes, tcp_pos, tcp_rot = forward_kinematics_chain_numba(
+        q, base_pos, base_rot, step_types, step_signs, step_dof_idx,
+        step_p_parent, step_p_child, step_F_parent, step_F_child_T,
+        step_axis_parent, tcp_local_pos, tcp_local_rot,
+    )
+    err_vec, pos_err_m, rot_err_rad = compute_pose_error_numba(
+        tcp_pos, tcp_rot, target_pos, target_rot, mode_code
+    )
+
+    lam = damping if damping > 1e-4 else 1e-4
+    iters_used = 0
+    alphas = np.array([1.0, 0.5, 0.25, 0.1], dtype=np.float64)
+
+    for it in range(1, max_iters + 1):
+        if pos_err_m <= pos_tol_m and (not check_rot or rot_err_rad <= rot_tol_rad):
+            iters_used = it - 1
+            break
+        iters_used = it
+
+        J_full = compute_geometric_jacobian_numba(dof_types, joint_anchors, joint_axes, tcp_pos)
+
+        J_eff = np.empty((m_task, n_dof), dtype=np.float64)
+        e_eff = np.empty(m_task, dtype=np.float64)
+        for r in range(3):
+            e_eff[r] = err_vec[r]
+            for c in range(n_dof):
+                J_eff[r, c] = J_full[r, c]
+        if m_task == 6:
+            for r in range(3, 6):
+                e_eff[r] = err_vec[r] * rot_weight
+                for c in range(n_dof):
+                    J_eff[r, c] = J_full[r, c] * rot_weight
+
+        curr_cost = np.linalg.norm(e_eff)
+        lam_eff = lam * (1.0 + 0.5 * curr_cost)
+        lam_sq = lam_eff * lam_eff
+
+        free_mask = np.ones(n_dof, dtype=np.bool_)
+        dq = np.zeros(n_dof, dtype=np.float64)
+
+        for _ in range(n_dof + 1):
+            n_free = 0
+            for idx in range(n_dof):
+                if free_mask[idx]:
+                    n_free += 1
+            if n_free == 0:
+                dq[:] = 0.0
+                break
+
+            J_free = np.empty((m_task, n_free), dtype=np.float64)
+            free_indices = np.empty(n_free, dtype=np.int32)
+            col_ptr = 0
+            for idx in range(n_dof):
+                if free_mask[idx]:
+                    free_indices[col_ptr] = idx
+                    for r in range(m_task):
+                        J_free[r, col_ptr] = J_eff[r, idx]
+                    col_ptr += 1
+
+            JJT = J_free @ np.ascontiguousarray(J_free.T)
+            for r in range(m_task):
+                JJT[r, r] += lam_sq
+
+            y_task = np.linalg.solve(JJT, e_eff)
+            dq_free = np.ascontiguousarray(J_free.T) @ y_task
+
+            if enforce_limits and n_free > m_task:
+                bias = np.empty(n_free, dtype=np.float64)
+                for c in range(n_free):
+                    orig_i = free_indices[c]
+                    bias[c] = q_mid[orig_i] - q[orig_i]
+                Jb = J_free @ bias
+                y_null = np.linalg.solve(JJT, Jb)
+                proj_bias = bias - (np.ascontiguousarray(J_free.T) @ y_null)
+                dq_free = dq_free + 0.05 * proj_bias
+
+            dq[:] = 0.0
+            for c in range(n_free):
+                dq[free_indices[c]] = dq_free[c]
+
+            if not enforce_limits:
+                break
+
+            newly_clamped = False
+            for idx in range(n_dof):
+                if not free_mask[idx] or not is_bounded[idx]:
+                    continue
+                if q[idx] <= q_min[idx] + 1e-7 and dq[idx] < 0.0:
+                    free_mask[idx] = False
+                    newly_clamped = True
+                elif q[idx] >= q_max[idx] - 1e-7 and dq[idx] > 0.0:
+                    free_mask[idx] = False
+                    newly_clamped = True
+            if not newly_clamped:
+                break
+
+        max_abs_dq = 0.0
+        for idx in range(n_dof):
+            a_dq = abs(dq[idx])
+            if a_dq > max_abs_dq:
+                max_abs_dq = a_dq
+        if max_abs_dq < 1e-9:
+            break
+        if max_abs_dq > max_step_rad:
+            dq = dq * (max_step_rad / max_abs_dq)
+
+        accepted = False
+        for a_idx in range(4):
+            alpha = alphas[a_idx]
+            q_trial = q + alpha * dq
+            if enforce_limits:
+                for idx in range(n_dof):
+                    if is_bounded[idx]:
+                        if q_trial[idx] < q_min[idx]:
+                            q_trial[idx] = q_min[idx]
+                        elif q_trial[idx] > q_max[idx]:
+                            q_trial[idx] = q_max[idx]
+
+            _, _, ja_t, jx_t, tp_t, tr_t = forward_kinematics_chain_numba(
+                q_trial, base_pos, base_rot, step_types, step_signs, step_dof_idx,
+                step_p_parent, step_p_child, step_F_parent, step_F_child_T,
+                step_axis_parent, tcp_local_pos, tcp_local_rot,
+            )
+            err_t, p_err_t, r_err_t = compute_pose_error_numba(
+                tp_t, tr_t, target_pos, target_rot, mode_code
+            )
+            if m_task == 3:
+                trial_cost = np.sqrt(err_t[0] ** 2 + err_t[1] ** 2 + err_t[2] ** 2)
+            else:
+                trial_cost = np.sqrt(
+                    err_t[0] ** 2 + err_t[1] ** 2 + err_t[2] ** 2
+                    + (rot_weight * err_t[3]) ** 2
+                    + (rot_weight * err_t[4]) ** 2
+                    + (rot_weight * err_t[5]) ** 2
+                )
+
+            if trial_cost < curr_cost or a_idx == 3:
+                q = q_trial
+                joint_anchors = ja_t
+                joint_axes = jx_t
+                tcp_pos = tp_t
+                tcp_rot = tr_t
+                err_vec = err_t
+                pos_err_m = p_err_t
+                rot_err_rad = r_err_t
+                if trial_cost < curr_cost:
+                    lam = max(lam * 0.85, 1e-4)
+                else:
+                    lam = min(lam * 1.5, 1.0)
+                accepted = True
+                break
+
+        if not accepted:
+            break
+
+    return q, iters_used, pos_err_m, rot_err_rad, tcp_pos, tcp_rot
 
 
 def warm_up_numba_kernels():
@@ -444,6 +920,43 @@ def warm_up_numba_kernels():
         0.3,
         0.01,
         contact_Q,
+    )
+
+    # --- Warm up Robotics FK, Jacobian, Euler & DLS IK kernels ---
+    eye3 = np.eye(3, dtype=np.float64)
+    zero3 = np.zeros(3, dtype=np.float64)
+    matrix_to_pos_angles_deg_numba(eye3)
+    pos_angles_deg_to_matrix_numba(zero3)
+    so3_rotvec_numba(eye3)
+
+    rk_q = np.array([0.1], dtype=np.float64)
+    rk_step_types = np.array([1], dtype=np.int32)
+    rk_step_signs = np.array([1.0], dtype=np.float64)
+    rk_step_dof = np.array([0], dtype=np.int32)
+    rk_p_par = np.zeros((1, 3), dtype=np.float64)
+    rk_p_chi = np.array([[0.0, 0.0, -0.1]], dtype=np.float64)
+    rk_F_par = np.zeros((1, 3, 3), dtype=np.float64)
+    rk_F_par[0] = eye3
+    rk_F_chi_T = np.zeros((1, 3, 3), dtype=np.float64)
+    rk_F_chi_T[0] = eye3
+    rk_ax_par = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+    rk_dof_types = np.array([1], dtype=np.int32)
+    rk_q_min = np.array([-np.pi], dtype=np.float64)
+    rk_q_max = np.array([np.pi], dtype=np.float64)
+    rk_bounded = np.array([True], dtype=np.bool_)
+    rk_q_mid = np.array([0.0], dtype=np.float64)
+
+    _, _, rk_ja, rk_jx, rk_tp, rk_tr = forward_kinematics_chain_numba(
+        rk_q, zero3, eye3, rk_step_types, rk_step_signs, rk_step_dof,
+        rk_p_par, rk_p_chi, rk_F_par, rk_F_chi_T, rk_ax_par, zero3, eye3,
+    )
+    compute_geometric_jacobian_numba(rk_dof_types, rk_ja, rk_jx, rk_tp)
+    compute_pose_error_numba(rk_tp, rk_tr, zero3, eye3, 0)
+    solve_ik_dls_numba(
+        rk_q, zero3, eye3, rk_step_types, rk_step_signs, rk_step_dof,
+        rk_p_par, rk_p_chi, rk_F_par, rk_F_chi_T, rk_ax_par, rk_dof_types,
+        zero3, eye3, rk_tp, rk_tr, 0, True, rk_q_min, rk_q_max, rk_bounded, rk_q_mid,
+        1e-4, 1e-4, 5, 0.05, 0.35,
     )
 
     _NUMBA_WARMED_UP = True

@@ -1,6 +1,6 @@
 # SimPhant
 
-SimPhant™ is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
+SimPhant® is an engineering-focused multibody dynamics (MBD) simulation environment for building, visualizing, and solving mechanical systems. It combines CAD-based geometry, rigid-body physics, constraints, forces, springs, contacts, gears, and motion definitions in a desktop application with an interactive 3D viewport.
 
 ![SimPhant demo](./icons/Demo_Video_GIF.gif)
 
@@ -32,6 +32,7 @@ If you want to inspect the implementation, modify the solver, or contribute code
 - Interactive 3D visualization powered by PyVista and PyVistaQt
 - Rigid-body creation from CAD meshes and procedural primitives
 - Import of URDF models for the robotic systems simulations
+- The Robotics & Inverse Kinematics Workbench provides a complete kinematic and inverse-dynamics workflow for articulated mechanisms
 - Mass, center-of-gravity, inertia tensor, and principal-axis calculations
 - Reference frames and body positioning tools
 - Joints including fixed, spherical, revolute, cylindrical, prismatic, and planar joints
@@ -49,7 +50,7 @@ If you want to inspect the implementation, modify the solver, or contribute code
 
 ## License
 
-SimPhant™ is free and open-source software distributed under the GNU General Public License v3.0 (GPLv3). See [LICENSE.txt](./LICENSE.txt) for the full license text.
+SimPhant is free and open-source software distributed under the GNU General Public License v3.0 (GPLv3). See [LICENSE.txt](./LICENSE.txt) for the full license text.
 
 ## Project Status
 

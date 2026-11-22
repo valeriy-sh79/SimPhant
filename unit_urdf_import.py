@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_urdf_import.py
 #  Description:
 #      Parses URDF (Unified Robot Description Format) robot models into a
@@ -11,20 +11,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import os
@@ -193,13 +193,18 @@ class UrdfLink:
 
 class UrdfJoint:
     """ A single <joint>: connects a parent link to a child link with a fixed offset and motion axis. """
-    def __init__(self, name, joint_type, parent, child, origin, axis):
+    def __init__(self, name, joint_type, parent, child, origin, axis,
+                 limit_lower=None, limit_upper=None, limit_effort=None, limit_velocity=None):
         self.name = name
         self.joint_type = joint_type   # raw URDF string: 'revolute', 'continuous', 'prismatic', 'fixed', 'planar', 'floating'
         self.parent = parent           # parent link name
         self.child = child             # child link name
         self.origin = origin           # 4x4 matrix: child/joint frame, relative to the parent link's frame
         self.axis = axis               # normalized 3-vector, expressed in the joint (child) frame
+        self.limit_lower = limit_lower       # float (rad or m) or None
+        self.limit_upper = limit_upper       # float (rad or m) or None
+        self.limit_effort = limit_effort     # float (Nm or N) or None
+        self.limit_velocity = limit_velocity # float (rad/s or m/s) or None
 
 
 class UrdfRobot:
@@ -365,10 +370,39 @@ class UrdfRobot:
         norm = np.linalg.norm(axis)
         axis = axis / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
 
+        limit_lower = None
+        limit_upper = None
+        limit_effort = None
+        limit_velocity = None
+        limit_elem = joint_elem.find('limit')
+        if limit_elem is not None:
+            if limit_elem.get('lower') is not None:
+                try:
+                    limit_lower = float(limit_elem.get('lower'))
+                except ValueError:
+                    pass
+            if limit_elem.get('upper') is not None:
+                try:
+                    limit_upper = float(limit_elem.get('upper'))
+                except ValueError:
+                    pass
+            if limit_elem.get('effort') is not None:
+                try:
+                    limit_effort = float(limit_elem.get('effort'))
+                except ValueError:
+                    pass
+            if limit_elem.get('velocity') is not None:
+                try:
+                    limit_velocity = float(limit_elem.get('velocity'))
+                except ValueError:
+                    pass
+
         return UrdfJoint(
             name=name, joint_type=joint_type,
             parent=parent_elem.get('link'), child=child_elem.get('link'),
             origin=origin, axis=axis,
+            limit_lower=limit_lower, limit_upper=limit_upper,
+            limit_effort=limit_effort, limit_velocity=limit_velocity,
         )
 
     # ------------------------------------------

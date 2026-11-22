@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_collision.py
 #  Description:
 #      Defines the ContactPair class for handling collision interactions between rigid bodies, 
@@ -10,26 +10,43 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
 import trimesh
+from contextlib import contextmanager
+from time import perf_counter
 from manifold3d import Error, Manifold, Mesh64
 from trimesh.ray.ray_triangle import ray_triangle_candidates
+
+
+@contextmanager
+def _contact_stage(profile, key, exclude=None):
+    if profile is None:
+        yield
+        return
+    excluded_before = profile.get(exclude, 0.0)
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = perf_counter() - started
+        excluded = profile.get(exclude, 0.0) - excluded_before
+        profile[key] = profile.get(key, 0.0) + elapsed - excluded
 
 
 def empty_contact_manifold():
@@ -59,7 +76,7 @@ class RegionContactGeometry:
             raise ValueError(f"Contact geometry '{name}' is not a valid Manifold solid: {self.solid.status()}.")
         self.surface_ids = np.unique(self.solid.to_mesh64().run_original_id)
 
-    def _region_contact(self, region, tolerance):
+    def _region_contact(self, region, tolerance, profile=None):
         """Measure opposite surface patches, without requiring an interior centroid."""
         mesh = region.to_mesh64()
         vertices = np.asarray(mesh.vert_properties[:, :3])
@@ -82,36 +99,42 @@ class RegionContactGeometry:
         if np.any(facing[self_faces] > 0.05) or np.any(facing[~self_faces] < -0.05):
             raise ContactResolutionError(f"Overlap wraps beyond a separating surface on '{self.name}'.")
 
-        samples = np.vstack((surface.vertices, surface.triangles_center))
-        projected = samples @ normal
-        rays = samples + (projected.min() - projected - 1.0)[:, None] * normal
-        directions = np.tile(normal, (len(rays), 1))
-        candidates, candidate_rays = ray_triangle_candidates(rays, directions, surface.triangles_tree)
-        locations, valid_planes = trimesh.intersections.planes_lines(
-            surface.triangles[candidates, 0], surface.face_normals[candidates],
-            rays[candidate_rays], directions[candidate_rays])
-        candidates, candidate_rays = candidates[valid_planes], candidate_rays[valid_planes]
-        try:
-            with np.errstate(divide='raise', invalid='raise'):
-                barycentric = trimesh.triangles.points_to_barycentric(
-                    surface.triangles[candidates], locations, method='cross')
-        except FloatingPointError as exc:
-            raise ContactResolutionError(f"Degenerate overlap triangles on '{self.name}'.") from exc
-        hit = np.all((barycentric >= -1e-13) & (barycentric <= 1 + 1e-13), axis=1)
-        face_ids, ray_ids = candidates[hit], candidate_rays[hit]
-        if len(face_ids) < 2:
-            raise ContactResolutionError(f"No opposing surface hits on '{self.name}'.")
-        distances = (np.einsum('ij,ij->i', surface.triangles_center[face_ids] - rays[ray_ids],
-                               surface.face_normals[face_ids]) / facing[face_ids]
-                     + rays[ray_ids] @ normal)
-        order = np.lexsort((distances, ray_ids))
-        ray_ids, distances, face_ids = ray_ids[order], distances[order], face_ids[order]
-        valid = ((ray_ids[1:] == ray_ids[:-1]) & self_faces[face_ids[:-1]]
-                 & ~self_faces[face_ids[1:]] & (facing[face_ids[:-1]] < 0)
-                 & (facing[face_ids[1:]] > 0))
-        if not np.any(valid):
-            raise ContactResolutionError(f"No opposing surface interval on '{self.name}'.")
-        depth = float(np.max(np.diff(distances)[valid])) * scale
+        with _contact_stage(profile, 'ray_query_time'):
+            samples = np.vstack((surface.vertices, surface.triangles_center))
+            projected = samples @ normal
+            rays = samples + (projected.min() - projected - 1.0)[:, None] * normal
+            directions = np.tile(normal, (len(rays), 1))
+            if profile is not None:
+                profile['ray_queries'] = profile.get('ray_queries', 0) + 1
+                profile['rays_total'] = profile.get('rays_total', 0) + len(rays)
+            candidates, candidate_rays = ray_triangle_candidates(rays, directions, surface.triangles_tree)
+            if profile is not None:
+                profile['ray_candidates_total'] = profile.get('ray_candidates_total', 0) + len(candidates)
+            locations, valid_planes = trimesh.intersections.planes_lines(
+                surface.triangles[candidates, 0], surface.face_normals[candidates],
+                rays[candidate_rays], directions[candidate_rays])
+            candidates, candidate_rays = candidates[valid_planes], candidate_rays[valid_planes]
+            try:
+                with np.errstate(divide='raise', invalid='raise'):
+                    barycentric = trimesh.triangles.points_to_barycentric(
+                        surface.triangles[candidates], locations, method='cross')
+            except FloatingPointError as exc:
+                raise ContactResolutionError(f"Degenerate overlap triangles on '{self.name}'.") from exc
+            hit = np.all((barycentric >= -1e-13) & (barycentric <= 1 + 1e-13), axis=1)
+            face_ids, ray_ids = candidates[hit], candidate_rays[hit]
+            if len(face_ids) < 2:
+                raise ContactResolutionError(f"No opposing surface hits on '{self.name}'.")
+            distances = (np.einsum('ij,ij->i', surface.triangles_center[face_ids] - rays[ray_ids],
+                                   surface.face_normals[face_ids]) / facing[face_ids]
+                         + rays[ray_ids] @ normal)
+            order = np.lexsort((distances, ray_ids))
+            ray_ids, distances, face_ids = ray_ids[order], distances[order], face_ids[order]
+            valid = ((ray_ids[1:] == ray_ids[:-1]) & self_faces[face_ids[:-1]]
+                     & ~self_faces[face_ids[1:]] & (facing[face_ids[:-1]] < 0)
+                     & (facing[face_ids[1:]] > 0))
+            if not np.any(valid):
+                raise ContactResolutionError(f"No opposing surface interval on '{self.name}'.")
+            depth = float(np.max(np.diff(distances)[valid])) * scale
         if depth <= tolerance:
             return None
         center = surface.center_mass * scale + origin
@@ -119,34 +142,40 @@ class RegionContactGeometry:
             raise ContactResolutionError(f"Non-finite overlap measurement on '{self.name}'.")
         return center, normal, depth
 
-    def contact_regions(self, other, rotation, position, other_rotation, other_position):
+    def contact_regions(self, other, rotation, position, other_rotation, other_position, profile=None):
         """Return one common application point, normal on self, and depth per overlap volume."""
         relative_rotation = rotation.T @ other_rotation
         relative_position = (rotation.T @ (other_position - position)
                              + relative_rotation @ other.origin - self.origin)
         transform = np.column_stack((relative_rotation, relative_position))
-        intersection = self.solid ^ other.solid.transform(transform)
-        if intersection.status() != Error.NoError:
-            raise ValueError(f"Contact intersection '{self.name}' / '{other.name}' failed: {intersection.status()}.")
-        if intersection.is_empty():
-            return empty_contact_manifold()
+        with _contact_stage(profile, 'boolean_time'):
+            intersection = self.solid ^ other.solid.transform(transform)
+            if intersection.status() != Error.NoError:
+                raise ValueError(f"Contact intersection '{self.name}' / '{other.name}' failed: {intersection.status()}.")
+            if intersection.is_empty():
+                if profile is not None:
+                    profile['empty_intersections'] = profile.get('empty_intersections', 0) + 1
+                return empty_contact_manifold()
 
-        tolerance = max(self.solid.get_tolerance(), other.solid.get_tolerance(), 1e-12)
-        contacts = []
-        for region in intersection.decompose():
-            if region.volume() <= tolerance ** 3:
-                continue
-            contact = self._region_contact(region, tolerance)
-            if contact is not None:
-                contacts.append(contact)
-        if not contacts:
-            return empty_contact_manifold()
-        points, normals, depths = (np.asarray(values) for values in zip(*contacts))
-        order = np.lexsort((points[:, 2], points[:, 1], points[:, 0]))
-        world_origin = position + rotation @ self.origin
-        return (np.ascontiguousarray(points[order] @ rotation.T + world_origin),
-                np.ascontiguousarray(normals[order] @ rotation.T),
-                np.ascontiguousarray(depths[order]))
+        with _contact_stage(profile, 'region_processing_time', exclude='ray_query_time'):
+            tolerance = max(self.solid.get_tolerance(), other.solid.get_tolerance(), 1e-12)
+            contacts = []
+            for region in intersection.decompose():
+                if region.volume() <= tolerance ** 3:
+                    continue
+                if profile is not None:
+                    profile['regions_measured'] = profile.get('regions_measured', 0) + 1
+                contact = self._region_contact(region, tolerance, profile)
+                if contact is not None:
+                    contacts.append(contact)
+            if not contacts:
+                return empty_contact_manifold()
+            points, normals, depths = (np.asarray(values) for values in zip(*contacts))
+            order = np.lexsort((points[:, 2], points[:, 1], points[:, 0]))
+            world_origin = position + rotation @ self.origin
+            return (np.ascontiguousarray(points[order] @ rotation.T + world_origin),
+                    np.ascontiguousarray(normals[order] @ rotation.T),
+                    np.ascontiguousarray(depths[order]))
 
 
 class ContactPair:

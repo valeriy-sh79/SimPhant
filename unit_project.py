@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_project.py
 #  Description:
 #      Handles saving and loading the complete MBD simulation state, including exporting meshes and project data.
@@ -9,20 +9,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import os
@@ -33,18 +33,145 @@ import shutil
 import numpy as np
 import pyvista as pv
 
+from unit_spline import (
+    SplineDataError,
+    format_spline_expression,
+    parse_spline_expression,
+    resolve_spline_path,
+)
+
 # This module acts as a translator. It converts the Python objects into JSON dictionaries, 
 # exports the PyVista meshes to .stl files, and zips them into a single file.
 
 class ProjectManager:
     """ Handles saving and loading the complete MBD simulation state. """
-    
+
+    @staticmethod
+    def _bundle_spline_for_save(expr_str, cached_spline_path, splines_dir, bundled_map, used_arc_names, base_dir=None):
+        """
+        If `expr_str` is a `spline(...)` expression whose file exists on disk, copies that file
+        into `splines_dir` (deduplicated by source path) and returns its ZIP-relative path
+        (e.g. `'splines/my_curve.csv'`). Returns `None` for non-spline expressions or missing files.
+        """
+        raw_path = parse_spline_expression(expr_str)
+        if raw_path is None:
+            return None
+
+        source_path = None
+        try:
+            source_path = resolve_spline_path(raw_path, base_dir=base_dir)
+        except SplineDataError:
+            if cached_spline_path and os.path.isfile(cached_spline_path):
+                source_path = os.path.normpath(cached_spline_path)
+
+        if not source_path or not os.path.isfile(source_path):
+            print(f"Warning: Could not find spline file '{raw_path}' to embed into .mbd archive.")
+            return None
+
+        norm_src = os.path.normcase(os.path.abspath(source_path))
+        if norm_src in bundled_map:
+            return bundled_map[norm_src]
+
+        os.makedirs(splines_dir, exist_ok=True)
+        orig_name = os.path.basename(source_path) or "spline_data.csv"
+        stem, ext = os.path.splitext(orig_name)
+        if not ext:
+            ext = ".csv"
+
+        candidate = f"{stem}{ext}"
+        counter = 2
+        while candidate.lower() in used_arc_names:
+            candidate = f"{stem}_{counter}{ext}"
+            counter += 1
+
+        used_arc_names.add(candidate.lower())
+        shutil.copy2(source_path, os.path.join(splines_dir, candidate))
+
+        arc_rel_path = f"splines/{candidate}"
+        bundled_map[norm_src] = arc_rel_path
+        return arc_rel_path
+
+    @staticmethod
+    def _resolve_or_extract_spline_expr(expr_str, embedded_rel_path, temp_dir, mbd_filepath, base_dir, extracted_map):
+        """
+        Resolves a `spline(...)` expression when loading an `.mbd` archive:
+          1) If the CSV/DAT file exists at its saved location, loads directly from that location
+             and ignores any embedded copy inside the `.mbd`.
+          2) If the file or directory does NOT exist at the saved location, extracts the embedded
+             spline file from the `.mbd` into `<mbd_dir>/splines/<mbd_stem>/` (with safe fallbacks)
+             and returns `spline(<extracted_path>)`.
+          3) For legacy `.mbd` files without embedded splines, returns `expr_str` unchanged so
+             existing warning/fallback behavior is preserved without failing project load.
+        """
+        raw_path = parse_spline_expression(expr_str)
+        if raw_path is None:
+            return expr_str
+
+        # 1. Prefer the saved file location if it exists on disk
+        mbd_dir = os.path.dirname(os.path.abspath(mbd_filepath)) if mbd_filepath else None
+        for candidate_base in (base_dir, mbd_dir):
+            try:
+                existing_path = resolve_spline_path(raw_path, base_dir=candidate_base)
+                if os.path.isfile(existing_path):
+                    return format_spline_expression(existing_path)
+            except SplineDataError:
+                pass
+
+        # 2. Saved path does not exist -> locate embedded spline inside extracted temp_dir
+        embedded_src = None
+        if embedded_rel_path:
+            rel_parts = [p for p in str(embedded_rel_path).replace("\\", "/").split("/") if p and p not in (".", "..")]
+            if rel_parts:
+                cand = os.path.join(temp_dir, *rel_parts)
+                if os.path.isfile(cand):
+                    embedded_src = cand
+
+        if embedded_src is None:
+            # Legacy .mbd without embedded spline file: do not fail here; let compile_expression warn cleanly
+            return expr_str
+
+        cache_key = os.path.normcase(os.path.abspath(embedded_src))
+        if cache_key in extracted_map and os.path.isfile(extracted_map[cache_key]):
+            return format_spline_expression(extracted_map[cache_key])
+
+        mbd_stem = os.path.splitext(os.path.basename(mbd_filepath))[0] if mbd_filepath else "project"
+        filename = os.path.basename(embedded_src)
+
+        candidate_dirs = []
+        if mbd_dir:
+            candidate_dirs.append(os.path.join(mbd_dir, "splines", mbd_stem))
+        if base_dir:
+            candidate_dirs.append(os.path.join(base_dir, "splines", mbd_stem))
+        candidate_dirs.append(os.path.join(tempfile.gettempdir(), "SimPhant_splines", mbd_stem))
+
+        dest_path = None
+        for target_dir in candidate_dirs:
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                target_file = os.path.join(target_dir, filename)
+                shutil.copy2(embedded_src, target_file)
+                dest_path = os.path.normpath(target_file)
+                break
+            except OSError:
+                continue
+
+        if dest_path is None:
+            return expr_str
+
+        extracted_map[cache_key] = dest_path
+        print(f"[Project Load] Spline not found at '{raw_path}'; extracted embedded spline to '{dest_path}'.")
+        return format_spline_expression(dest_path)
+
     @staticmethod
     def save_project(app, filepath):
         """ Exports the scene to a zipped .mbd file. """
         temp_dir = tempfile.mkdtemp()
         meshes_dir = os.path.join(temp_dir, "meshes")
+        splines_dir = os.path.join(temp_dir, "splines")
         os.makedirs(meshes_dir)
+        bundled_splines = {}
+        used_spline_arc_names = set()
+        base_dir = getattr(app, 'working_dir', None)
         
         data = {
             "version": "1.0",
@@ -106,7 +233,9 @@ class ProjectManager:
             
         # --- 3. Save Forces & Actuators ---
         for force in app.forces_list:
-            data["forces"].append({
+            force_expr = getattr(force, 'magnitude_expr', str(force.magnitude))
+            is_grav = getattr(force, 'is_gravity', False)
+            force_entry = {
                 "name": force.name,
                 "force_type": force.force_type.value,
                 "parent_body": force.parent_body.name,
@@ -116,12 +245,24 @@ class ProjectManager:
                 "enabled": force.enabled,
                 "visible": force.visible,
                 "direction": force.direction,
-                "magnitude": getattr(force, 'magnitude_expr', str(force.magnitude)), # <--- THE FIX
+                "magnitude": force_expr,
                 "speed_max": force.speed_max,
                 "allow_braking": getattr(force, 'allow_braking', True),
                 "source_rf_name": getattr(force, 'source_rf_name', ""),
-                "is_gravity": getattr(force, 'is_gravity', False)
-            })
+                "is_gravity": is_grav
+            }
+            if not is_grav:
+                spline_arc = ProjectManager._bundle_spline_for_save(
+                    force_expr,
+                    getattr(force, 'spline_file_path', None),
+                    splines_dir,
+                    bundled_splines,
+                    used_spline_arc_names,
+                    base_dir=base_dir,
+                )
+                if spline_arc is not None:
+                    force_entry["spline_file"] = spline_arc
+            data["forces"].append(force_entry)
 
         # --- 4. Save Joints ---
         for joint in app.joints_list:
@@ -142,7 +283,12 @@ class ProjectManager:
                 "local_a_j": getattr(joint, 'local_a_j', [1,0,0]).tolist(),
                 "local_b_j": getattr(joint, 'local_b_j', [0,1,0]).tolist(),
                 "source_anchor_name": getattr(joint, 'source_anchor_name', ""),
-                "source_target_name": getattr(joint, 'source_target_name', "")
+                "source_target_name": getattr(joint, 'source_target_name', ""),
+                "limits_enabled": bool(getattr(joint, 'limits_enabled', False)),
+                "limit_min": float(getattr(joint, 'limit_min', -np.pi)),
+                "limit_max": float(getattr(joint, 'limit_max', np.pi)),
+                "max_effort": float(getattr(joint, 'max_effort', 0.0)),
+                "max_velocity": float(getattr(joint, 'max_velocity', 0.0))
             })
 
         # --- 5. Save Springs ---
@@ -232,16 +378,32 @@ class ProjectManager:
         
         # --- 8.5 Save Kinematic Motions ---
         for motion in getattr(app, 'motions_list', []):
-            data["motions"].append({
+            motion_entry = {
                 "name": motion.name,
                 "joint": motion.joint.name,
                 "trans_rot": motion.trans_rot.value,
                 "motion_type": motion.motion_type.value,
                 "expression_str": motion.expression_str,
                 "enabled": motion.enabled
-            })
+            }
+            spline_arc = ProjectManager._bundle_spline_for_save(
+                motion.expression_str,
+                getattr(motion, 'spline_file_path', None),
+                splines_dir,
+                bundled_splines,
+                used_spline_arc_names,
+                base_dir=base_dir,
+            )
+            if spline_arc is not None:
+                motion_entry["spline_file"] = spline_arc
+            data["motions"].append(motion_entry)
         
-        # --- 9. Save Solver Settings & File Output ---
+        # --- 9. Save Solver Settings & Robotics Trajectory Waypoints ---
+        if getattr(app, 'robotics_window', None) is not None:
+            app.robotics_project_state = app.robotics_window.export_project_state()
+        if getattr(app, 'robotics_project_state', None):
+            data["robotics"] = app.robotics_project_state
+
         data["solver_settings"] = {
             "t_end": app.ui.Edit_SimulationTime.text(),
             "steps_per_sec": app.ui.Edit_StepsPerSec.text(),
@@ -255,7 +417,7 @@ class ProjectManager:
         
         # --- 10. Write JSON, Compress Results, and ZIP it! ---
         json_path = os.path.join(temp_dir, "model.json")
-        with open(json_path, 'w') as f:
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
             
         # THE UPGRADE: Check if simulation results exist, and binary compress them!
@@ -302,6 +464,13 @@ class ProjectManager:
                     full_path = os.path.join(root, file)
                     arc_name = os.path.join("meshes", file)
                     zipf.write(full_path, arcname=arc_name)
+
+            if os.path.isdir(splines_dir):
+                for root, _, files in os.walk(splines_dir):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        arc_name = f"splines/{file}"
+                        zipf.write(full_path, arcname=arc_name)
                     
         shutil.rmtree(temp_dir) # Clean up temp files
         print(f"Project saved successfully to {filepath}")
@@ -310,12 +479,14 @@ class ProjectManager:
     def load_project(app, filepath):
         """ Restores the scene from a zipped .mbd file. """
         temp_dir = tempfile.mkdtemp()
+        extracted_splines = {}
+        base_dir = getattr(app, 'working_dir', None)
         
         with zipfile.ZipFile(filepath, 'r') as zipf:
             zipf.extractall(temp_dir)
             
         json_path = os.path.join(temp_dir, "model.json")
-        with open(json_path, 'r') as f:
+        with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
         # 1. Restore Gravity
@@ -452,12 +623,6 @@ class ProjectManager:
                     vector=np.array(f_data.get("base_vector", [0,0,0])), plotter=app.plotter
                 )
                 new_f.direction = f_data.get("direction", 'Z')
-                
-                # --- Load and compile the math string! ---
-                saved_mag = f_data.get("magnitude", "0.0")
-                new_f.compile_expression(str(saved_mag))
-                # --------------------------------------------------
-                
                 new_f.speed_max = f_data.get("speed_max", 0.0)
                 new_f.allow_braking = f_data.get("allow_braking", True)
                 new_f.source_rf_name = f_data.get("source_rf_name", "")
@@ -474,8 +639,7 @@ class ProjectManager:
                     
                     # --- THE FIX 2: Override the 0.0 string to guarantee the arrow is visible! ---
                     g_mag = np.linalg.norm(app.global_gravity)
-                    if g_mag > 1e-6:
-                        new_f.compile_expression(str(g_mag))
+                    new_f.compile_expression(str(g_mag) if g_mag > 1e-6 else "0.0")
                         
                     # Sync the UI Checkboxes
                     if hasattr(app.ui, 'chkVisibleGravity'):
@@ -487,7 +651,15 @@ class ProjectManager:
                 else:
                     # For standard forces, safely load the expression (fallback to "magnitude" for very old saves)
                     expr_str = f_data.get("expression_str", str(f_data.get("magnitude", "0.0")))
-                    new_f.compile_expression(expr_str, base_dir=getattr(app, 'working_dir', None))
+                    resolved_expr = ProjectManager._resolve_or_extract_spline_expr(
+                        expr_str,
+                        f_data.get("spline_file"),
+                        temp_dir=temp_dir,
+                        mbd_filepath=filepath,
+                        base_dir=base_dir,
+                        extracted_map=extracted_splines,
+                    )
+                    new_f.compile_expression(resolved_expr, base_dir=base_dir)
                     new_f.visible = f_data.get("visible", True)
                     # --- Only add Custom Forces to the Tree! ---
                     QTreeWidgetItem(app.node_forces, [new_f.name])
@@ -520,6 +692,12 @@ class ProjectManager:
             new_j.source_anchor_name = j_data.get("source_anchor_name", "")
             new_j.source_target_name = j_data.get("source_target_name", "")
             new_j.enabled = j_data.get("enabled", True)
+            default_lim = 1.0 if new_j.joint_type == JointType.PRISMATIC else np.pi
+            new_j.limits_enabled = bool(j_data.get("limits_enabled", False))
+            new_j.limit_min = float(j_data.get("limit_min", -default_lim))
+            new_j.limit_max = float(j_data.get("limit_max", default_lim))
+            new_j.max_effort = float(j_data.get("max_effort", 0.0))
+            new_j.max_velocity = float(j_data.get("max_velocity", 0.0))
             
             app.joints_list.append(new_j)
             QTreeWidgetItem(app.node_joints, [new_j.name])
@@ -665,8 +843,16 @@ class ProjectManager:
                     motion_type=m_data.get("motion_type", 0)
                 )
                 
-                # Recompile the math string safely
-                new_motion.compile_expression(m_data.get("expression_str", "0.0"), base_dir=getattr(app, 'working_dir', None))
+                # Recompile the math string safely (prefer saved spline path, else extract from .mbd)
+                motion_expr = ProjectManager._resolve_or_extract_spline_expr(
+                    m_data.get("expression_str", "0.0"),
+                    m_data.get("spline_file"),
+                    temp_dir=temp_dir,
+                    mbd_filepath=filepath,
+                    base_dir=base_dir,
+                    extracted_map=extracted_splines,
+                )
+                new_motion.compile_expression(motion_expr, base_dir=base_dir)
                 new_motion.enabled = m_data.get("enabled", True)
                 
                 app.motions_list.append(new_motion)
@@ -677,7 +863,12 @@ class ProjectManager:
                 
                 QTreeWidgetItem(app.node_motions, [new_motion.name])
         
-        # --- 9. Restore Solver Settings ---
+        # --- 9. Restore Solver Settings & Robotics Trajectory Waypoints ---
+        app.robotics_project_state = data.get("robotics", None)
+        if getattr(app, 'robotics_window', None) is not None:
+            app.robotics_window.populate_scene_selectors()
+            app.robotics_window.import_project_state(app.robotics_project_state)
+
         if "solver_settings" in data:
             s_set = data["solver_settings"]
             app.ui.Edit_SimulationTime.setText(s_set.get("t_end", "10.0"))
@@ -731,6 +922,13 @@ class ProjectManager:
                 with np.load(results_path) as npz:
                     app.simulation_dt = float(npz['dt'][0])
                     
+                    try:
+                        baumgarte_val = float(app.ui.Edit_Alpha_Beta.text().strip().replace(',', '.'))
+                    except Exception:
+                        baumgarte_val = 20.0
+                    compliance_map = {0: 0.0, 1: 1e-5, 2: 1e-7, 3: 1e-9, 4: 1e-11}
+                    epsilon_val = compliance_map.get(app.ui.cmbSolverCompliance.currentIndex(), 1e-7)
+
                     # Instantiate a "Dummy" solver purely as a mathematical data container
                     app.solver = MBSolver(
                         app.physics_bodies, 
@@ -741,7 +939,10 @@ class ProjectManager:
                         # --- Hand the gears to the dummy solver! ---
                         gear_pairs=getattr(app, 'gear_pairs_list', []),
                         # --- Hand the loaded motions to the dummy solver! ---
-                        motions_list=getattr(app, 'motions_list', [])
+                        motions_list=getattr(app, 'motions_list', []),
+                        epsilon=epsilon_val,
+                        alpha=baumgarte_val,
+                        beta=baumgarte_val
                     )
                     
                     # Inject the mathematical memory

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.1
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_rigidbody.py
 #  Description:
 #      Computes and stores the exact physical properties of mechanical parts, including mass, 
@@ -10,23 +10,24 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
+import pyvista as pv
 from scipy.spatial.transform import Rotation
 import math3d 
 
@@ -263,8 +264,8 @@ class RigidBody:
         gpu_matrix[:3, :3] = rot_3x3
         gpu_matrix[:3, 3] = pos_m * MMtoM # Convert solver meters -> Viewport mm
         
-        # Instantly move/rotate the body on screen
-        self.actor.user_matrix = gpu_matrix        
+        # Instantly move/rotate the body on screen (bypassing PyVista Python validation overhead)
+        self.actor.SetUserMatrix(pv.vtkmatrix_from_array(gpu_matrix))        
         
     def generate_local_aabb(self):
         """ Extracts the 8 corners of the bounding box strictly from the centered local mesh. """

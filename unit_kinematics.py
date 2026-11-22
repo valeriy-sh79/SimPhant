@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_kinematics.py
 #  Description:
 #      Defines the local reference frame class (RFrame) used to precisely anchor 
@@ -10,20 +10,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
@@ -45,14 +45,48 @@ class RFrame:
         
         self.is_cog = is_cog       # Locks the RF from user modification
         self.visible = True        # User visibility toggle
-        self.parent_body = parent_body # The RigidBody this CoG belongs to
+        self.parent_body = parent_body # The RigidBody this RF belongs to
         self.plotter = plotter
+
+        # Body-local offset relative to parent_body (so non-CoG frames like tool0 track body motion!)
+        self.local_position = np.zeros(3, dtype=float)
+        self.local_rotation = np.eye(3, dtype=float)
+        self.sync_local_from_global()
         
         # 3D Visual Variables
         self.actors = []
         self.base_scale = 1.0 # Will be updated dynamically by the Camera Zoom
         
         self.create_visuals()
+
+    def sync_local_from_global(self):
+        """Recomputes body-local `(local_position, local_rotation)` from current global pose and `parent_body`."""
+        if self.parent_body is not None and not getattr(self.parent_body, 'is_ground', False):
+            if self.is_cog:
+                self.local_position = np.zeros(3, dtype=float)
+                self.local_rotation = np.eye(3, dtype=float)
+            else:
+                A_p = self.parent_body.principal_axes
+                self.local_position = A_p.T @ (self.position - self.parent_body.cog)
+                self.local_rotation = A_p.T @ self.transform_matrix
+        else:
+            self.local_position = self.position.copy()
+            self.local_rotation = self.transform_matrix.copy()
+
+    def sync_global_from_parent(self):
+        """Updates global `(position, transform_matrix, orientation)` from `parent_body` and stored local offset."""
+        if self.parent_body is None or getattr(self.parent_body, 'is_ground', False):
+            return
+        if self.is_cog:
+            self.position = self.parent_body.cog
+            self.transform_matrix = self.parent_body.principal_axes
+            self.orientation = self.parent_body.pos_angles
+        else:
+            from math_kernels import matrix_to_pos_angles_deg_numba
+            A_p = self.parent_body.principal_axes
+            self.position = self.parent_body.cog + A_p @ self.local_position
+            self.transform_matrix = A_p @ self.local_rotation
+            self.orientation = matrix_to_pos_angles_deg_numba(np.ascontiguousarray(self.transform_matrix, dtype=np.float64))
         
     def create_visuals(self):
         # We build the arrows centered at (0,0,0) with length 1.0.
@@ -87,10 +121,16 @@ class RFrame:
         # Apply the global translation (converted from solver meters to viewport mm!)
         mat[:3, 3] = self.position * MMtoM 
         
-        # Push the matrix directly to the GPU
+        # Push the matrix directly to the GPU (bypassing slow per-actor Python validation)
+        if not self.visible:
+            for act in self.actors:
+                act.SetVisibility(False)
+            return
+
+        vtk_mat = pv.vtkmatrix_from_array(mat)
         for act in self.actors:
-            act.user_matrix = mat
-            act.SetVisibility(self.visible)
+            act.SetUserMatrix(vtk_mat)
+            act.SetVisibility(True)
             
     def set_scale(self, scale):
         """ Called by the camera event to keep axes exactly 40-50 pixels wide. """

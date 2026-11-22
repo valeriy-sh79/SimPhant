@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_springs.py
 #  Description:
 #      Defines compliant physical connections, including 1D compression/torsion springs 
@@ -10,20 +10,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import re
@@ -290,8 +290,9 @@ class CompressionSpring(BaseSpring):
         mat[:3, :3] = R 
         mat[:3, 3] = p_i * 1000.0 # Convert meters to PyVista mm!
         
+        vtk_mat = pv.vtkmatrix_from_array(mat)
         for act in self.actors:
-            act.user_matrix = mat
+            act.SetUserMatrix(vtk_mat)
             act.SetVisibility(True)
 
 
@@ -424,8 +425,9 @@ class TorsionSpring(BaseSpring):
         mat[:3, :3] = R 
         mat[:3, 3] = p_i * 1000.0 
         
+        vtk_mat = pv.vtkmatrix_from_array(mat)
         for act in self.actors:
-            act.user_matrix = mat
+            act.SetUserMatrix(vtk_mat)
             act.SetVisibility(True)
             
 def _rotation_vector(R):
@@ -537,8 +539,9 @@ class Bushing(BaseSpring):
         mat[:3, :3] = R @ scale_mat
         mat[:3, 3] = p_i * 1000.0 
         
+        vtk_mat = pv.vtkmatrix_from_array(mat)
         for act in self.actors:
-            act.user_matrix = mat
+            act.SetUserMatrix(vtk_mat)
             act.SetVisibility(True)            
             
     def bind_kinematics(self, rframes_list):

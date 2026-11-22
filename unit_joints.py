@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.09.0
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: unit_joints.py
 #  Description:
 #      Defines various joint types and kinematic gear pair constraints for multibody dynamics simulations.
@@ -9,20 +9,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
@@ -165,6 +165,17 @@ class Joint:
         # UI Memory Trackers
         self.source_anchor_name = ""
         self.source_target_name = ""
+
+        # --- Robotics / Joint Stroke & Effort Limits (SI units: rad & Nm, or m & N) ---
+        self.limits_enabled = False
+        if self.joint_type == JointType.PRISMATIC:
+            self.limit_min = -1.0
+            self.limit_max = 1.0
+        else:
+            self.limit_min = -np.pi
+            self.limit_max = np.pi
+        self.max_effort = 0.0
+        self.max_velocity = 0.0
 
         # Visualization
         self.plotter = plotter
@@ -322,5 +333,6 @@ class Joint:
         mat[:3, :3] = global_R * visual_scale # scale_size
         mat[:3, 3] = g_pos * MMtoM 
 
+        vtk_mat = pv.vtkmatrix_from_array(mat)
         for act in self.actors:
-            act.user_matrix = mat
+            act.SetUserMatrix(vtk_mat)

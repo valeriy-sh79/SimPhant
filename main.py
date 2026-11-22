@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: main.py
 #  Description:
 #     Main entry point for the SimPhant application. Initializes and runs the main window.
@@ -11,20 +11,20 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import sys
@@ -67,7 +67,7 @@ import unit_urdf_import
 APP_NAME = "SimPhant"
 APP_MAIN_WINDOW_TITLE = "SimPhant Physics Engine - MBD Simulator"
 APP_DESCRIPTION = "Multibody Dynamics (MBD) Physics Engine & Simulation Environment"
-APP_VERSION = "2026.10.2"
+APP_VERSION = "2026.11.1"
 APP_RELEASE_DATE = "XXXX/XX/XX" # Placeholder for the actual release date
 APP_LICENSE = "GNU General Public License v3.0"
 APP_CREDITS_NAME = "Valeriy Shapovalov"
@@ -294,6 +294,13 @@ class PhysicsEngineMain(QMainWindow):
 
         self._configure_debug_logging(self.project_dir, append=False)
         logging.info("Application Started. Physics Engine Initialized.")
+
+        # Block external Windows 11 UIAutomation (WM_GETOBJECT) polling from stalling Qt slider/spinbox events
+        try:
+            from unit_robotics import install_win_uia_shield
+            install_win_uia_shield()
+        except Exception:
+            pass
         
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -306,6 +313,7 @@ class PhysicsEngineMain(QMainWindow):
         self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
         self.setCorner(Qt.Corner.BottomLeftCorner, Qt.DockWidgetArea.BottomDockWidgetArea)
         QTimer.singleShot(0, self.minimize_traceback_dock)
+        self.set_tree_hierarchy_dock_width()  # Before the first show, so the dock never visibly resizes
 
         # --- Redirect print()/stdout/stderr into the dckTraceback dock (needed for EXE builds without a console) ---
         self._redirect_std_streams_to_traceback()
@@ -378,6 +386,8 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.actionDocumentation.triggered.connect(self.open_documentation)
         if hasattr(self.ui, 'actionShowTraceback'):
             self.ui.actionShowTraceback.triggered.connect(self.show_traceback_dock)
+        if hasattr(self.ui, 'actionShow_TreeHierarchy'):
+            self.ui.actionShow_TreeHierarchy.triggered.connect(self.show_tree_hierarchy_dock)
         
         # 2. Original material-based OBJ splitter
         self.ui.actionImport_OBJ.triggered.connect(self.import_cad_obj_materials)
@@ -478,6 +488,10 @@ class PhysicsEngineMain(QMainWindow):
         # --- Connect the Optional CSV Export Button ---
         self.ui.btnExportCSV.clicked.connect(self.export_csv_results)
         self.ui.btnTelemetry.clicked.connect(self.open_telemetry_window)
+        if hasattr(self.ui, 'btnRobotic_IK'):
+            self.ui.btnRobotic_IK.clicked.connect(self.open_robotics_window)
+        if hasattr(self.ui, 'btnImportURDF'):
+            self.ui.btnImportURDF.clicked.connect(self.import_urdf_robot)
         # --- Dynamic Solver Settings UI ---
         self.ui.cmbSolverMethod.currentIndexChanged.connect(self.on_solver_method_changed)
         self.on_solver_method_changed(self.ui.cmbSolverMethod.currentIndex()) # Initialize state
@@ -604,6 +618,7 @@ class PhysicsEngineMain(QMainWindow):
         # --- Motions Array ---
         self.motions_list = []
         self.selected_motion = None
+        self.robotics_project_state = None
         
         # --- UI Connections: Bushings ---
         self.ui.btnAddBushing.clicked.connect(self.add_bushing)
@@ -751,6 +766,8 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.btnXY_view: "Slide52.svg",
             self.ui.btnZY_view: "Slide53.svg",
             self.ui.btnXZ_view: "Slide54.svg",
+            self.ui.btnRobotic_IK: "Slide55.svg",
+            self.ui.btnImportURDF: "Slide56.svg",
 
         }
         self._install_theme_change_hooks()
@@ -994,6 +1011,14 @@ class PhysicsEngineMain(QMainWindow):
             self.ui.dckTraceback.show()
             self.ui.dckTraceback.raise_()
 
+    def show_tree_hierarchy_dock(self):
+        """Shows the Tree Hierarchy dock widget if it was hidden or closed."""
+        self.ui.dckTreeHierarchy.show()
+        self.ui.dckTreeHierarchy.raise_()
+
+    def set_tree_hierarchy_dock_width(self, width=185):
+        self.resizeDocks([self.ui.dckTreeHierarchy], [width], Qt.Orientation.Horizontal)
+
     def _redirect_std_streams_to_traceback(self):
         """Mirrors all stdout/stderr output (print statements, tracebacks) into the txbTraceback widget."""
         self._stdout_original = sys.stdout
@@ -1028,10 +1053,15 @@ class PhysicsEngineMain(QMainWindow):
         """Ensures dckTraceback resizes to its minimal height on display."""
         super().showEvent(event)
         QTimer.singleShot(0, self.minimize_traceback_dock)
+        if not getattr(self, '_startup_update_check_scheduled', False):
+            self._startup_update_check_scheduled = True
+            QTimer.singleShot(2000, self.check_for_updates_on_startup)
 
     def clear_scene_for_loading(self):
         """ Safely purges all memory and 3D actors to prepare for a new file. """
         self.clear_selection()
+        if getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window.clear_3d_preview_actors(render=False)
         
         # 1. Remove all 3D Actors from the Viewport
         for b in self.physics_bodies.values():
@@ -1054,6 +1084,10 @@ class PhysicsEngineMain(QMainWindow):
         # --- Purge Motions memory! ---
         if hasattr(self, 'motions_list'): self.motions_list.clear()
         self.selected_motion = None
+        self.robotics_project_state = None
+        if getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window._waypoints.clear()
+            self.robotics_window._rebuild_waypoint_table()
         # --- Purge the Gear memory! ---
         if hasattr(self, 'gear_pairs_list'): self.gear_pairs_list.clear() 
         # ---------------------------------------
@@ -1131,7 +1165,7 @@ class PhysicsEngineMain(QMainWindow):
 
         dialog.exec()
 
-    def check_for_updates(self):
+    def check_for_updates(self, silent=False):
         """Asks the GitHub Releases API for the latest SimPhant version without blocking the UI."""
         if getattr(self, '_update_reply', None) is not None:
             return  # A check is already running
@@ -1144,15 +1178,42 @@ class PhysicsEngineMain(QMainWindow):
         request.setRawHeader(b"User-Agent", f"{APP_NAME}/{APP_VERSION}".encode())
         request.setTransferTimeout(10000)
 
-        self.ui.actionCheck_for_updates.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._update_check_silent = silent
+        if not silent:
+            self.ui.actionCheck_for_updates.setEnabled(False)
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._update_reply = self._update_manager.get(request)
         self._update_reply.finished.connect(self._on_update_check_finished)
 
+    def check_for_updates_on_startup(self):
+        """Silent background check; only shows the banner when a newer version exists."""
+        self.check_for_updates(silent=True)
+
+    def _show_update_banner(self, version_text, release_url):
+        """Shows a clickable notice in the top-right corner of the menu bar."""
+        if getattr(self, '_update_banner', None) is None:
+            self._update_banner = QPushButton(self)
+            self._update_banner.setFlat(True)
+            self._update_banner.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._update_banner.setStyleSheet(
+                "QPushButton { color: #1a73e8; font-weight: bold; padding: 2px 10px; border: none; }"
+                "QPushButton:hover { text-decoration: underline; }"
+            )
+            self.menuBar().setCornerWidget(self._update_banner, Qt.Corner.TopRightCorner)
+            self._update_banner.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(self._update_banner_url))
+            )
+        self._update_banner_url = release_url
+        self._update_banner.setText(f"SimPhant {version_text} is available - click to download")
+        self._update_banner.setToolTip(f"You are running version {APP_VERSION}")
+        self._update_banner.show()
+
     def _on_update_check_finished(self):
         reply, self._update_reply = self._update_reply, None
-        QApplication.restoreOverrideCursor()
-        self.ui.actionCheck_for_updates.setEnabled(True)
+        silent = getattr(self, '_update_check_silent', False)
+        if not silent:
+            QApplication.restoreOverrideCursor()
+            self.ui.actionCheck_for_updates.setEnabled(True)
 
         latest_tag, release_url, error = None, APP_RELEASES_URL, None
         if reply.error() != QNetworkReply.NetworkError.NoError:
@@ -1169,6 +1230,11 @@ class PhysicsEngineMain(QMainWindow):
         current, latest = parse_version_tuple(APP_VERSION), parse_version_tuple(latest_tag)
         if error is None and (current is None or latest is None):
             error = f"Cannot compare versions '{APP_VERSION}' and '{latest_tag}'."
+
+        if silent:
+            if error is None and latest > current:
+                self._show_update_banner(latest_tag.lstrip('vV'), release_url)
+            return  # Offline or failed startup checks stay silent
 
         box = QMessageBox(self)
         box.setWindowTitle("Check for updates")
@@ -1565,6 +1631,16 @@ class PhysicsEngineMain(QMainWindow):
             existing_joint_names.add(joint_name)
 
             new_joint = Joint(name=joint_name, joint_type=j_type, body_i=body_i, body_j=body_j, plotter=self.plotter)
+            if joint.joint_type in ('revolute', 'prismatic') and (joint.limit_lower is not None or joint.limit_upper is not None):
+                new_joint.limits_enabled = True
+                if joint.limit_lower is not None:
+                    new_joint.limit_min = float(joint.limit_lower)
+                if joint.limit_upper is not None:
+                    new_joint.limit_max = float(joint.limit_upper)
+            if joint.limit_effort is not None:
+                new_joint.max_effort = float(joint.limit_effort)
+            if joint.limit_velocity is not None:
+                new_joint.max_velocity = float(joint.limit_velocity)
 
             anchor_pos = unit_urdf_import.joint_world_anchor(joint, world_transforms)
             axis_world = unit_urdf_import.joint_world_axis(joint, world_transforms)
@@ -3514,13 +3590,10 @@ class PhysicsEngineMain(QMainWindow):
             if not body.is_ground:
                 body.update_graphics_matrix(body.cog, body.principal_axes)
                 
-        # --- STEP 2 UPGRADE: Sync CoG Reference Frames! ---
+        # --- STEP 2 UPGRADE: Sync CoG & Body-Attached Reference Frames! ---
         for rf in self.rframes:
-            if rf.is_cog and not rf.parent_body.is_ground:
-                # Copy the exact physics state from the parent body to the RF
-                rf.position = rf.parent_body.cog
-                rf.transform_matrix = rf.parent_body.principal_axes
-                rf.orientation = rf.parent_body.pos_angles
+            if rf.parent_body and not rf.parent_body.is_ground:
+                rf.sync_global_from_parent()
                 rf.update_transform()
                 
         # --- STEP 1 UPGRADE: Fix disappearing forces & exploding joints! ---
@@ -3628,10 +3701,8 @@ class PhysicsEngineMain(QMainWindow):
                         body.update_graphics_matrix(body.cog, body.principal_axes)
                         
                 for rf in self.rframes:
-                    if rf.is_cog and not rf.parent_body.is_ground:
-                        rf.position = rf.parent_body.cog
-                        rf.transform_matrix = rf.parent_body.principal_axes
-                        rf.orientation = rf.parent_body.pos_angles
+                    if rf.parent_body and not rf.parent_body.is_ground:
+                        rf.sync_global_from_parent()
                         rf.update_transform()
                         
                 for force in self.forces_list: 
@@ -3704,6 +3775,8 @@ class PhysicsEngineMain(QMainWindow):
             self.playback_time = 0.0
             self.render_playback_frame()
             print("Resetting physical state to t=0 from previous simulation...")
+        if getattr(self, 'robotics_window', None) is not None and self.robotics_window.chain is not None:
+            self.robotics_window.zero_all_joints()
             
         # Return the system to initial state before the simulation starts (it does not work if simulation crashed)
         # self.stop_animation()
@@ -3870,12 +3943,10 @@ class PhysicsEngineMain(QMainWindow):
                     if not body.is_ground:
                         body.update_graphics_matrix(body.cog, body.principal_axes)
                         
-                # 3. Sync CoG Reference Frames
+                # 3. Sync CoG & Body-Attached Reference Frames
                 for rf in self.rframes:
-                    if rf.is_cog and not rf.parent_body.is_ground:
-                        rf.position = rf.parent_body.cog
-                        rf.transform_matrix = rf.parent_body.principal_axes
-                        rf.orientation = rf.parent_body.pos_angles
+                    if rf.parent_body and not rf.parent_body.is_ground:
+                        rf.sync_global_from_parent()
                         rf.update_transform()
                         
                 # 4. Sync Forces and Joints visuals
@@ -5060,6 +5131,7 @@ class PhysicsEngineMain(QMainWindow):
             existing_rf.position = pos_m
             existing_rf.orientation = orientation
             existing_rf.transform_matrix = rot_matrix
+            existing_rf.sync_local_from_global()
             
         existing_rf.update_transform()
         
@@ -5215,6 +5287,7 @@ class PhysicsEngineMain(QMainWindow):
                 
         else:
             rf.position = rf.position + global_shift_m
+            rf.sync_local_from_global()
 
         # 4. Update visuals and UI text
         rf.update_transform()
@@ -5297,6 +5370,7 @@ class PhysicsEngineMain(QMainWindow):
         else:
             rf.transform_matrix = new_rot.as_matrix()
             rf.orientation = new_orientation
+            rf.sync_local_from_global()
 
         # 5. Update visuals and UI text
         rf.update_transform()
@@ -6671,6 +6745,48 @@ class PhysicsEngineMain(QMainWindow):
             parent=self 
         )
         self.telemetry_window.show()
+
+    def open_robotics_window(self):
+        """ Launches the Robotics & Inverse Kinematics Workbench. """
+        moving_bodies = [b for b in self.physics_bodies.values() if not b.is_ground and getattr(b, 'enabled', True)]
+        if len(moving_bodies) < 2 or len(getattr(self, 'joints_list', [])) < 1:
+            QMessageBox.information(
+                self,
+                "Robotics & IK Workbench",
+                "Please load or create a model with at least two bodies connected by joints before opening the Robotics Workbench."
+            )
+            return
+
+        from unit_robotics import RoboticsWindow
+
+        # Rewind any active animation playback to t=0 before capturing/rebuilding the kinematic chain
+        if getattr(self, 'solver', None) is not None and getattr(self.solver, 'simulation_history', None) is not None:
+            if hasattr(self, 'playback_timer') and self.playback_timer.isActive():
+                self.playback_timer.stop()
+            if getattr(self, 'playback_time', 0.0) != 0.0:
+                self.playback_time = 0.0
+                self.render_playback_frame()
+
+        if getattr(self, 'robotics_window', None) is not None and self.robotics_window.is_workbench_open():
+            self.robotics_window.populate_scene_selectors()
+            if getattr(self, 'robotics_project_state', None):
+                self.robotics_window.import_project_state(self.robotics_project_state)
+            else:
+                self.robotics_window.rebuild_chain(auto_quiet=True)
+            self.robotics_window.present_workbench()
+            return
+
+        if getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window.populate_scene_selectors()
+            if getattr(self, 'robotics_project_state', None):
+                self.robotics_window.import_project_state(self.robotics_project_state)
+            else:
+                self.robotics_window.rebuild_chain(auto_quiet=True)
+            self.robotics_window.present_workbench()
+            return
+
+        self.robotics_window = RoboticsWindow(app=self, parent=self)
+        self.robotics_window.present_workbench()
 
     # =====================
     # -----  GEARS

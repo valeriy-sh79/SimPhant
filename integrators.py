@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-#  SimPhant™ — Multibody Dynamics Simulation Software
-#  Version: 2026.10.2
+#  SimPhant® — Multibody Dynamics Simulation Software
+#  Version: 2026.11.1
 #  Module: integrators.py
 #  Description:
 #     Implements various numerical integration strategies for solving the equations of motion 
@@ -12,25 +12,27 @@
 #  Copyright (C) 2026  Valeriy Shapovalov
 #  GitHub: https://github.com/valeriy-sh79
 #   
-#  This file is part of SimPhant™.
+#  This file is part of SimPhant.
 #
-#  SimPhant™ is free software: you can redistribute it and/or modify
+#  SimPhant is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  SimPhant™ is distributed in the hope that it will be useful,
+#  SimPhant is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with SimPhant™.  If not, see <https://www.gnu.org/licenses/>.
+#  along with SimPhant.  If not, see <https://www.gnu.org/licenses/>.
 # =============================================================================
 
 import numpy as np
 from scipy.integrate import solve_ivp, RK23, RK45, DOP853, Radau, BDF, LSODA
 import logging
+from math import isclose
+from time import perf_counter
 from unit_collision import ContactResolutionError
 
 class IntegratorStrategy:
@@ -184,6 +186,34 @@ class SciPyIntegrator(IntegratorStrategy):
         methods = {'RK23': RK23, 'RK45': RK45, 'DOP853': DOP853,
                    'Radau': Radau, 'BDF': BDF, 'LSODA': LSODA}
         solver_type = methods[self.method]
+        explicit_rk = self.method in ('RK23', 'RK45', 'DOP853')
+        profile = self.step_profile = {
+            'accepted_steps': 0, 'rejected_steps': 0 if explicit_rk else None,
+            'rejected_rhs_calls': 0 if explicit_rk else None,
+            'geometry_retries': 0, 'geometry_failed_wall_time': 0.0,
+            'rhs_calls': 0, 'rhs_time': 0.0, 'dense_output_time': 0.0,
+            'dense_output_calls': 0, 'dense_output_unused': 0,
+            'min_accepted_step': None, 'max_accepted_step': 0.0,
+            'accepted_sim_time': 0.0, 'user_cap_limited_steps': 0,
+            'recovery_cap_active_steps': 0, 'recovery_cap_active_sim_time': 0.0,
+            'recovery_cap_active_wall_time': 0.0,
+            'recovery_cap_limited_steps': 0, 'recovery_cap_limited_sim_time': 0.0,
+            'recovery_cap_limited_wall_time': 0.0, 'recovery_cap_limited_rhs_calls': 0,
+            'final_recovery_cap': None, 'recovery_events': [],
+        }
+        for phase in ('initialization', 'step', 'dense_output', 'rollback'):
+            profile[f'{phase}_rhs_calls'] = 0
+            profile[f'{phase}_rhs_time'] = 0.0
+        if explicit_rk:
+            class ProfiledStepper(solver_type):
+                def _estimate_error_norm(self, *args, **kwargs):
+                    error_norm = super()._estimate_error_norm(*args, **kwargs)
+                    if not error_norm < 1:
+                        profile['rejected_steps'] += 1
+                        profile['rejected_rhs_calls'] += self.n_stages
+                    return error_norm
+
+            solver_type = ProfiledStepper
         start, end = t_span
         accepted_time = start
         accepted_state = np.asarray(initial_state).copy()
@@ -202,26 +232,50 @@ class SciPyIntegrator(IntegratorStrategy):
         def evaluate(time, state):
             nonlocal last_rhs_time
             last_rhs_time = time
-            return dynamics_func(time, state)
+            started = perf_counter()
+            profile['rhs_calls'] += 1
+            profile[f'{phase}_rhs_calls'] += 1
+            try:
+                return dynamics_func(time, state)
+            finally:
+                elapsed = perf_counter() - started
+                profile['rhs_time'] += elapsed
+                profile[f'{phase}_rhs_time'] += elapsed
 
         while accepted_time < end:
+            step_started = perf_counter()
+            rhs_before = profile['rhs_calls']
+            cap_active = step_limit < self.max_step
             try:
                 if engine is None:
+                    phase = 'initialization'
                     engine = solver_type(evaluate, accepted_time, accepted_state.copy(), end,
                                          rtol=self.rtol, atol=self.atol, max_step=step_limit,
                                          first_step=first_step)
+                phase = 'step'
                 message = engine.step()
                 if engine.status == 'failed':
                     raise RuntimeError(f"Integration failed at {engine.t:.9g} s: {message}")
             except ContactResolutionError as exc:
                 failed_time = last_rhs_time
-                dynamics_func(accepted_time, accepted_state.copy())
+                phase = 'rollback'
+                evaluate(accepted_time, accepted_state.copy())
                 retries += 1
                 self.contact_retries += 1
+                profile['geometry_retries'] += 1
+                elapsed = perf_counter() - step_started
+                profile['geometry_failed_wall_time'] += elapsed
+                if cap_active:
+                    profile['recovery_cap_active_wall_time'] += elapsed
                 attempted_step = abs(failed_time - accepted_time)
                 if engine is not None:
                     attempted_step = min(attempted_step, getattr(engine, 'h_abs', attempted_step))
                 step_limit = min(step_limit, attempted_step) * 0.5
+                profile['final_recovery_cap'] = float(step_limit)
+                profile['recovery_events'].append({
+                    'accepted_time': float(accepted_time), 'failed_time': float(failed_time),
+                    'step_cap': float(step_limit), 'reason': str(exc),
+                })
                 minimum_step = 32 * abs(np.spacing(max(abs(accepted_time), abs(end))))
                 if retries > 12 or step_limit <= minimum_step:
                     raise ContactResolutionError(
@@ -233,11 +287,35 @@ class SciPyIntegrator(IntegratorStrategy):
                 first_step = min(step_limit, end - accepted_time)
                 continue
 
+            phase = 'dense_output'
+            dense_started = perf_counter()
             interpolant = engine.dense_output()
             sample_end = np.searchsorted(sample_times, engine.t, side='right')
             if sample_end > sample_index:
                 history[sample_index:sample_end] = interpolant(sample_times[sample_index:sample_end]).T
                 sample_index = sample_end
+            else:
+                profile['dense_output_unused'] += 1
+            profile['dense_output_time'] += perf_counter() - dense_started
+            profile['dense_output_calls'] += 1
+            step_size = float(engine.t - accepted_time)
+            profile['accepted_steps'] += 1
+            profile['accepted_sim_time'] += step_size
+            smallest = profile['min_accepted_step']
+            profile['min_accepted_step'] = step_size if smallest is None else min(smallest, step_size)
+            profile['max_accepted_step'] = max(profile['max_accepted_step'], step_size)
+            elapsed = perf_counter() - step_started
+            if cap_active:
+                profile['recovery_cap_active_steps'] += 1
+                profile['recovery_cap_active_sim_time'] += step_size
+                profile['recovery_cap_active_wall_time'] += elapsed
+                if isclose(step_size, step_limit, rel_tol=1e-8):
+                    profile['recovery_cap_limited_steps'] += 1
+                    profile['recovery_cap_limited_sim_time'] += step_size
+                    profile['recovery_cap_limited_wall_time'] += elapsed
+                    profile['recovery_cap_limited_rhs_calls'] += profile['rhs_calls'] - rhs_before
+            elif isclose(step_size, self.max_step, rel_tol=1e-8):
+                profile['user_cap_limited_steps'] += 1
             accepted_time = engine.t
             accepted_state = engine.y.copy()
             retries = 0
@@ -245,6 +323,7 @@ class SciPyIntegrator(IntegratorStrategy):
 
     def solve(self, dynamics_func, t_span, Y0, t_eval, progress_callback=None):
         import logging
+        self.step_profile = None
         # Log the exact tolerances used for this run
         logging.info(f"Starting SciPy Integrator: {self.method} | rtol={self.rtol}, atol={self.atol}, max_step={self.max_step}")
         
