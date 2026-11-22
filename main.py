@@ -1891,6 +1891,9 @@ class PhysicsEngineMain(QMainWindow):
             else:
                 rf.set_selected(False)
 
+        if active_rf_name and getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window.on_scene_rframe_selected(active_rf_name)
+
         self.plotter.render()
 
     def display_body_properties(self, body):
@@ -5180,6 +5183,9 @@ class PhysicsEngineMain(QMainWindow):
                 self.node_rframes.child(i).setText(0, new_name)
                 break
 
+        if getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window.refresh_rframe_selectors(preferred_rf_name=new_name)
+
         print(f"Successfully renamed RF '{target_name}' to '{new_name}'.")
 
     def delete_rf(self):
@@ -5220,6 +5226,8 @@ class PhysicsEngineMain(QMainWindow):
                 
         # 4. Clean up visuals
         self.clear_selection()
+        if getattr(self, 'robotics_window', None) is not None:
+            self.robotics_window.refresh_rframe_selectors()
         print(f"Deleted RF '{rf.name}'.")
         
     def shift_rf(self):

@@ -1583,6 +1583,18 @@ class KinematicChain:
 #  UNIVERSAL ROBOTICS & INVERSE KINEMATICS UI (Step 1 & Step 2)
 # =============================================================================
 
+class _SceneRFComboBox(QComboBox):
+    """ComboBox that refreshes its Reference Frame list right before opening its popup."""
+    def __init__(self, refresh_callback=None, parent=None):
+        super().__init__(parent)
+        self._refresh_callback = refresh_callback
+
+    def showPopup(self):
+        if self._refresh_callback is not None:
+            self._refresh_callback()
+        super().showPopup()
+
+
 class RoboticsWindow(QDialog):
     """
     Universal Robotics & Inverse Kinematics Workbench for SimPhant.
@@ -1931,10 +1943,13 @@ class RoboticsWindow(QDialog):
 
         rf_pick_row = QHBoxLayout()
         rf_pick_row.addWidget(QLabel("Load Target from RFrame:"))
-        self.cmbTargetRF = QComboBox()
+        self.cmbTargetRF = _SceneRFComboBox(refresh_callback=self.refresh_rframe_selectors)
         self.cmbTargetRF.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.cmbTargetRF.setMinimumContentsLength(8)
-        self.cmbTargetRF.setToolTip("Select an existing Reference Frame in the scene to copy its 3D pose into the IK target.")
+        self.cmbTargetRF.setToolTip(
+            "Select an existing Reference Frame in the scene (or click any RF in the Model Tree / 3D Viewport) "
+            "to copy its 3D pose into the IK target."
+        )
         rf_pick_row.addWidget(self.cmbTargetRF, stretch=1)
         self.btnLoadTargetFromRF = QPushButton("Load RF Pose")
         self.btnLoadTargetFromRF.setToolTip("Copy the 3D position and orientation of the selected Reference Frame into the IK Target Pose fields.")
@@ -2029,6 +2044,7 @@ class RoboticsWindow(QDialog):
         self.btnCopyCurrToTarget.clicked.connect(self.copy_current_tcp_to_target)
         self.btnCreateTargetRF.clicked.connect(self.create_visual_target_rf)
         self.btnLoadTargetFromRF.clicked.connect(self.load_target_from_selected_rf)
+        self.cmbTargetRF.activated.connect(self._on_target_rf_combo_activated)
         self.btnSolveIK.clicked.connect(self.solve_and_apply_ik)
         self.cmbIKMode.currentIndexChanged.connect(self._on_ik_mode_changed)
 
@@ -2058,12 +2074,13 @@ class RoboticsWindow(QDialog):
         )
         wp_bar.addWidget(self.btnAddCurrPoseWp)
 
-        self.cmbWpSourceRF = QComboBox()
+        self.cmbWpSourceRF = _SceneRFComboBox(refresh_callback=self.refresh_rframe_selectors)
         self.cmbWpSourceRF.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.cmbWpSourceRF.setMinimumContentsLength(8)
         self.cmbWpSourceRF.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.cmbWpSourceRF.setToolTip(
-            "Select a scene Reference Frame (e.g. IK_Target_1) to add as a trajectory waypoint."
+            "Select a scene Reference Frame (or click any RF in the Model Tree / 3D Viewport) "
+            "to append as a trajectory waypoint."
         )
         wp_bar.addWidget(self.cmbWpSourceRF, stretch=1)
 
@@ -2263,6 +2280,7 @@ class RoboticsWindow(QDialog):
         # --- Wire Tab 2 Signals ---
         self.btnAddCurrPoseWp.clicked.connect(self.add_waypoint_from_current_pose)
         self.btnAddRFrameWp.clicked.connect(self.add_waypoint_from_selected_rf)
+        self.cmbWpSourceRF.activated.connect(self._on_wp_rf_combo_activated)
         self.btnPreviewSelectedWp.clicked.connect(self.jump_robot_to_selected_waypoint)
         self.btnMoveWpUp.clicked.connect(lambda: self._move_selected_waypoint(-1))
         self.btnMoveWpDown.clicked.connect(lambda: self._move_selected_waypoint(+1))
@@ -2525,27 +2543,86 @@ class RoboticsWindow(QDialog):
 
         self.cmbTCPRF.blockSignals(False)
 
-    def _populate_target_rf_combo(self):
-        prev_targ = self.cmbTargetRF.currentData()
-        prev_wp_rf = self.cmbWpSourceRF.currentData() if hasattr(self, 'cmbWpSourceRF') else None
+    def _populate_target_rf_combo(self, preferred_rf_name: str | None = None):
+        scene_sel = getattr(self.app, 'selected_rframe', None)
+        prev_targ = preferred_rf_name or self.cmbTargetRF.currentData() or scene_sel
+        prev_wp_rf = (
+            preferred_rf_name
+            or (self.cmbWpSourceRF.currentData() if hasattr(self, 'cmbWpSourceRF') else None)
+            or scene_sel
+        )
+
+        all_rfs = list(getattr(self.app, 'rframes', []))
+        custom_rfs = [r for r in all_rfs if not getattr(r, 'is_cog', False) and r.name != "Global_RF"]
+        cog_rfs = [r for r in all_rfs if getattr(r, 'is_cog', False)]
+        global_rfs = [r for r in all_rfs if r.name == "Global_RF"]
+        ordered_rfs = custom_rfs + cog_rfs + global_rfs
+
         self.cmbTargetRF.blockSignals(True)
         self.cmbTargetRF.clear()
         if hasattr(self, 'cmbWpSourceRF'):
             self.cmbWpSourceRF.blockSignals(True)
             self.cmbWpSourceRF.clear()
-        for rf in getattr(self.app, 'rframes', []):
-            if getattr(rf, 'is_cog', False):
-                continue
+
+        for rf in ordered_rfs:
             self.cmbTargetRF.addItem(rf.name, rf.name)
             if hasattr(self, 'cmbWpSourceRF'):
                 self.cmbWpSourceRF.addItem(rf.name, rf.name)
+
         if prev_targ and self.cmbTargetRF.findData(prev_targ) >= 0:
             self.cmbTargetRF.setCurrentIndex(self.cmbTargetRF.findData(prev_targ))
         if hasattr(self, 'cmbWpSourceRF') and prev_wp_rf and self.cmbWpSourceRF.findData(prev_wp_rf) >= 0:
             self.cmbWpSourceRF.setCurrentIndex(self.cmbWpSourceRF.findData(prev_wp_rf))
+
         self.cmbTargetRF.blockSignals(False)
         if hasattr(self, 'cmbWpSourceRF'):
             self.cmbWpSourceRF.blockSignals(False)
+
+    def refresh_rframe_selectors(self, preferred_rf_name: str | None = None):
+        """Refreshes Target / Waypoint RFrame dropdowns from the live scene `app.rframes` list."""
+        self._populate_target_rf_combo(preferred_rf_name=preferred_rf_name)
+
+    def on_scene_rframe_selected(self, rf_name: str | None):
+        """Syncs Tab 1 & Tab 2 RFrame selectors whenever the user selects or creates an RFrame in SimPhant."""
+        if not rf_name:
+            return
+        if self.cmbTargetRF.findData(rf_name) < 0 or (
+            hasattr(self, 'cmbWpSourceRF') and self.cmbWpSourceRF.findData(rf_name) < 0
+        ):
+            self._populate_target_rf_combo(preferred_rf_name=rf_name)
+            return
+
+        self.cmbTargetRF.blockSignals(True)
+        self.cmbTargetRF.setCurrentIndex(self.cmbTargetRF.findData(rf_name))
+        self.cmbTargetRF.blockSignals(False)
+
+        if hasattr(self, 'cmbWpSourceRF'):
+            self.cmbWpSourceRF.blockSignals(True)
+            self.cmbWpSourceRF.setCurrentIndex(self.cmbWpSourceRF.findData(rf_name))
+            self.cmbWpSourceRF.blockSignals(False)
+
+    def _on_target_rf_combo_activated(self, _index: int):
+        rf_name = self.cmbTargetRF.currentData()
+        if rf_name and hasattr(self.app, 'update_rf_selection_visuals'):
+            self.app.update_rf_selection_visuals(rf_name)
+
+    def _on_wp_rf_combo_activated(self, _index: int):
+        rf_name = self.cmbWpSourceRF.currentData()
+        if rf_name and hasattr(self.app, 'update_rf_selection_visuals'):
+            self.app.update_rf_selection_visuals(rf_name)
+
+    @staticmethod
+    def _get_rframe_pose_si(rf):
+        """Returns the up-to-date global `(pos_m, rot_mat)` of any `RFrame` (including CoG frames)."""
+        parent = getattr(rf, 'parent_body', None)
+        if getattr(rf, 'is_cog', False) and parent is not None and not getattr(parent, 'is_ground', False):
+            rf.position = parent.cog.copy()
+            rf.transform_matrix = parent.principal_axes.copy()
+            rf.orientation = parent.pos_angles.copy()
+        return (
+            np.asarray(rf.position, dtype=float).copy(),
+            np.asarray(rf.transform_matrix, dtype=float).copy(),
+        )
 
     def _on_ee_body_changed(self):
         if self._updating_ui:
@@ -3057,14 +3134,16 @@ class RoboticsWindow(QDialog):
             self._updating_ui = False
 
     def load_target_from_selected_rf(self):
-        rf_name = self.cmbTargetRF.currentData()
+        self.refresh_rframe_selectors()
+        rf_name = self.cmbTargetRF.currentData() or self.cmbTargetRF.currentText().strip()
         if not rf_name:
             return
         rf = next((r for r in getattr(self.app, 'rframes', []) if r.name == rf_name), None)
         if rf is None:
             return
-        pos_mm = rf.position * MMtoM
-        ori_zyx = matrix_to_pos_angles_deg(rf.transform_matrix)
+        pos_m, rot_mat = self._get_rframe_pose_si(rf)
+        pos_mm = pos_m * MMtoM
+        ori_zyx = matrix_to_pos_angles_deg(rot_mat)
         self._set_target_spinboxes(
             pos_mm[0], pos_mm[1], pos_mm[2],
             ori_zyx[2], ori_zyx[1], ori_zyx[0]
@@ -3100,12 +3179,10 @@ class RoboticsWindow(QDialog):
             QTreeWidgetItem(self.app.node_rframes, [rf_name])
             self.app.node_rframes.setExpanded(True)
 
-        self._populate_target_rf_combo()
-        idx_combo = self.cmbTargetRF.findData(rf_name)
-        if idx_combo >= 0:
-            self.cmbTargetRF.setCurrentIndex(idx_combo)
-
-        if getattr(self.app, 'plotter', None) is not None:
+        self._populate_target_rf_combo(preferred_rf_name=rf_name)
+        if hasattr(self.app, 'update_rf_selection_visuals'):
+            self.app.update_rf_selection_visuals(rf_name)
+        elif getattr(self.app, 'plotter', None) is not None:
             self.app.plotter.render()
         self.lblIKStatus.setText(f"Created visual Reference Frame '{rf_name}' at Target Pose.")
 
@@ -3195,6 +3272,7 @@ class RoboticsWindow(QDialog):
     def add_waypoint_from_current_pose(self):
         if self.chain is None:
             return
+        self._sync_waypoints_from_table()
         fk = self.chain.forward_kinematics(self.chain.current_q)
         wp = TrajectoryWaypoint(
             time_s=self._next_default_waypoint_time(),
@@ -3211,16 +3289,19 @@ class RoboticsWindow(QDialog):
         self._persist_state_to_app()
 
     def add_waypoint_from_selected_rf(self):
-        rf_name = self.cmbWpSourceRF.currentData()
+        self._sync_waypoints_from_table()
+        self.refresh_rframe_selectors()
+        rf_name = self.cmbWpSourceRF.currentData() or self.cmbWpSourceRF.currentText().strip()
         if not rf_name:
             return
         rf = next((r for r in getattr(self.app, 'rframes', []) if r.name == rf_name), None)
         if rf is None:
             return
+        pos_m, rot_mat = self._get_rframe_pose_si(rf)
         wp = TrajectoryWaypoint(
             time_s=self._next_default_waypoint_time(),
-            pos_m=rf.position.copy(),
-            rot_mat=rf.transform_matrix.copy(),
+            pos_m=pos_m,
+            rot_mat=rot_mat,
             segment_type="MOVEL",
             label=rf.name,
         )
@@ -3230,6 +3311,13 @@ class RoboticsWindow(QDialog):
         self.tblWaypoints.selectRow(len(self._waypoints) - 1)
         self._update_3d_preview_actors()
         self._persist_state_to_app()
+
+        pos_mm = pos_m * MMtoM
+        self.lblTrajStatus.setStyleSheet("background-color: #f8f9fa; color: #111111; padding: 6px; font-weight: bold;")
+        self.lblTrajStatus.setText(
+            f"Added Waypoint #{len(self._waypoints)} from Reference Frame '{rf.name}' "
+            f"({pos_mm[0]:.1f}, {pos_mm[1]:.1f}, {pos_mm[2]:.1f} mm)."
+        )
 
     def jump_robot_to_selected_waypoint(self):
         if self.chain is None or not self._waypoints:
