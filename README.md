@@ -192,6 +192,12 @@ User documentation is maintained in a separate Docusaurus repository:
 
 The documentation site contains the user guide, feature notes, and multilingual documentation content for English, Russian, and Ukrainian users.
 
+## Discussions
+
+Feel free to join Discussions as a place to connect with other members of our community, ask questions and share ideas!
+
+[SimPhant Discussions](https://github.com/valeriy-sh79/SimPhant/discussions)
+
 ## Support
 
 Please use the [SimPhant issue tracker](https://github.com/valeriy-sh79/SimPhant/issues) for bug reports, installation problems, and feature requests. When reporting a problem, include the SimPhant version, operating system, reproduction steps, and any traceback or screenshots that help explain the issue.
